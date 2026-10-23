@@ -1,0 +1,10 @@
+@import "./base.css";
+
+@layer base {
+    .border-card {
+        @apply border dark:border-neutral-600 rounded-xl p-4 text-sm font-normal flex flex-col items-start mt-2 space-y-2;
+        background-color: rgb(var(--rin-surface-rgb));
+        color: rgb(var(--rin-text-muted-rgb));
+        box-shadow: 0 10px 24px rgb(var(--rin-border-rgb) / 0.12);
+    }
+}
