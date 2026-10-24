@@ -96,7 +96,7 @@ export function Settings() {
   }>({ open: false, loading: false, items: [], target: "" });
 
   // 3.1 手动输入云端路径状态
-  const [manualCloudKey, setManualCloudKey] = useState("");
+  const [manualCloudKey, setManualCloudKey] = useState("backups/rin-backup-2026-10-24T01-43-36.json");
 
   // 4. 恢复前确认弹窗（包含待恢复数据预览）
   const [restoreConfirmModal, setRestoreConfirmModal] = useState<{
@@ -298,7 +298,7 @@ export function Settings() {
           target: data.target || "云端存储桶",
           error: data.error,
         });
-        if (data.items && data.items.length > 0 && !manualCloudKey) {
+        if (data.items && data.items.length > 0) {
           setManualCloudKey(data.items[0].key);
         }
       }
@@ -1047,7 +1047,7 @@ export function Settings() {
         <div className="flex flex-col items-start w-full">
           <h1 className="text-xl font-bold tracking-[-0.02em] t-primary">从云端存储桶恢复数据</h1>
           <p className="mt-1 text-sm text-neutral-500">
-            当前存储桶（{cloudBackupsModal.target}）历史快照列表：
+            当前存储桶（{cloudBackupsModal.target}）历史备份快照：
           </p>
 
           <div className="mt-4 w-full max-h-80 overflow-y-auto space-y-3">
@@ -1058,10 +1058,7 @@ export function Settings() {
               </div>
             ) : cloudBackupsModal.items.length === 0 ? (
               <div className="p-4 rounded-xl bg-secondary text-sm text-neutral-500 space-y-2">
-                <p>存储桶索引暂未读取到列表，但您的备份文件依然保存在存储桶中。</p>
-                {cloudBackupsModal.error ? (
-                  <p className="text-xs text-amber-500 font-mono">调试信息: {cloudBackupsModal.error}</p>
-                ) : null}
+                <p>存储桶索引暂未获取到，但文件已在存储桶中。请在下方直接输入完整路径恢复。</p>
               </div>
             ) : (
               cloudBackupsModal.items.map((item, idx) => (
@@ -1084,10 +1081,10 @@ export function Settings() {
             )}
           </div>
 
-          {/* 手动直接指定备份文件路径恢复兜底 */}
+          {/* 手动指定云端文件路径恢复兜底 */}
           <div className="mt-5 w-full pt-4 border-t border-black/5 dark:border-white/5 space-y-2">
             <p className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
-              或者直接指定云端备份文件路径恢复：
+              或直接指定云端备份文件完整路径恢复：
             </p>
             <div className="flex gap-2">
               <input
@@ -1103,7 +1100,7 @@ export function Settings() {
                 onClick={async () => {
                   const key = manualCloudKey.trim();
                   if (!key) {
-                    showAlert("请输入云端备份文件完整路径");
+                    showAlert("请输入完整文件路径，例如：backups/rin-backup-2026-10-24T01-43-36.json");
                     return;
                   }
                   setBackupActionLoading(true);
@@ -1130,6 +1127,9 @@ export function Settings() {
                 }}
               />
             </div>
+            <p className="text-[11px] text-neutral-400">
+              *注意：路径中<b>不需要包含存储桶名字</b>，必须带有 <b>.json</b> 后缀。
+            </p>
           </div>
 
           <div className="mt-6 flex w-full justify-end">
