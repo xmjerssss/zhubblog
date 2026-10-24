@@ -166,6 +166,15 @@ export interface BackupStorageListResponse {
     createdAt: string;
     metadata?: any;
   }>;
+  error?: string;
+}
+
+export interface BackupInspectResponse {
+  ok: boolean;
+  key: string;
+  filename: string;
+  exportedAt: string;
+  metadata: any;
 }
 
 export interface BackupRestoreResponse {
@@ -736,6 +745,11 @@ class BackupAPI {
   // 4. 获取云端备份列表
   listStorageBackups(): Promise<ApiResponse<BackupStorageListResponse>> {
     return this.http.get<BackupStorageListResponse>("/api/backup/storage-list");
+  }
+
+  // 4.1 检查云端指定路径的备份文件
+  inspectStorageBackup(key: string): Promise<ApiResponse<BackupInspectResponse>> {
+    return this.http.post<BackupInspectResponse>("/api/backup/inspect-storage-backup", { key });
   }
 
   // 5. 从云端恢复
