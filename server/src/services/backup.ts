@@ -21,6 +21,7 @@ import { driverForRow } from "../utils/storage-manager";
 const BACKUP_SCHEMA_VERSION = 1;
 const MAX_CLOUD_BACKUPS = 3; // 云端最多保留 3 份备份
 const BACKUP_DIR_NAME = "backups"; // 专门独立的备份归档目录
+const CLOUD_BACKUPS_CACHE_KEY = "cloud_backups_list";
 
 /** 获取当前系统可用的最佳存储驱动并规划备份目录 */
 async function getActiveStorageDriver(env: Env, db: any) {
@@ -284,6 +285,7 @@ export function BackupService(): Hono {
     app.post("/export-to-storage", adminOnly(async (c: AppContext) => {
         const db = c.get("db");
         const env = c.get("env");
+        const cacheManager = c.get("cache");
 
         const target = await getActiveStorageDriver(env, db);
         if (!target) {
@@ -295,7 +297,7 @@ export function BackupService(): Hono {
         const dateStr = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
         const fileName = `rin-backup-${dateStr}.json`;
         const objectKey = `${target.folder}/${fileName}`.replace(/\/+/g, "/");
-        const indexKey = `${target.folder}/index.json` .replace(/\/+/g, "/");
+        const indexKey = `${target.folder}/index.json`.replace(/\/+/g, "/");
 
         try {
             await target.driver.put(objectKey, jsonStr, "application/json");
@@ -333,6 +335,9 @@ export function BackupService(): Hono {
 
             await target.driver.put(indexKey, JSON.stringify(backupList, null, 2), "application/json");
 
+            // 双重本地索引备份：存入 cache 表，保证即便云端 index.json 读取受阻也能秒级恢复
+            await cacheManager.set(CLOUD_BACKUPS_CACHE_KEY, backupList).catch(() => {});
+
             return c.json({
                 ok: true,
                 filename: fileName,
@@ -352,6 +357,7 @@ export function BackupService(): Hono {
     app.get("/storage-list", adminOnly(async (c: AppContext) => {
         const db = c.get("db");
         const env = c.get("env");
+        const cacheManager = c.get("cache");
 
         const target = await getActiveStorageDriver(env, db);
         if (!target) {
@@ -360,6 +366,7 @@ export function BackupService(): Hono {
 
         const indexKey = `${target.folder}/index.json`.replace(/\/+/g, "/");
         let items: any[] = [];
+        let readError: string | null = null;
         try {
             const indexRes = await target.driver.get(indexKey);
             if (indexRes && indexRes.ok) {
@@ -367,18 +374,67 @@ export function BackupService(): Hono {
                 items = JSON.parse(text);
                 if (!Array.isArray(items)) items = [];
             }
-        } catch {
-            items = [];
+        } catch (err: any) {
+            readError = err?.message || String(err);
+            console.error("[backup] storage-list read error:", err);
+        }
+
+        // 双重保障回退：若云端 index.json 未拿到，自动从本地数据库缓存读取
+        if (items.length === 0) {
+            try {
+                const cached = await cacheManager.get(CLOUD_BACKUPS_CACHE_KEY);
+                if (Array.isArray(cached) && cached.length > 0) {
+                    items = cached;
+                }
+            } catch {}
         }
 
         return c.json({
             ok: true,
             target: target.name,
             items,
+            error: items.length === 0 ? readError : undefined,
         });
     }));
 
-    // 4. POST /backup/restore-from-storage —— 从云端选定的一份备份文件恢复
+    // 4. POST /backup/inspect-storage-backup —— 检查并预览指定路径的备份文件
+    app.post("/inspect-storage-backup", adminOnly(async (c: AppContext) => {
+        const db = c.get("db");
+        const env = c.get("env");
+        const body = (await c.req.json().catch(() => ({}))) as { key?: string };
+        const key = body.key?.trim();
+        if (!key) {
+            return c.json({ ok: false, error: "请输入备份文件路径" }, 400);
+        }
+
+        const target = await getActiveStorageDriver(env, db);
+        if (!target) {
+            return c.json({ ok: false, error: "未配置存储桶" }, 400);
+        }
+
+        try {
+            const fileRes = await target.driver.get(key);
+            if (!fileRes || !fileRes.ok) {
+                return c.json({ ok: false, error: `在存储桶中未找到文件: ${key}` }, 404);
+            }
+            const payload = JSON.parse(await fileRes.text());
+            if (!payload || payload.app !== "rin" || !payload.data) {
+                return c.json({ ok: false, error: "该文件不是有效的 Rin 备份快照" }, 400);
+            }
+
+            return c.json({
+                ok: true,
+                key,
+                filename: key.split("/").pop() || key,
+                exportedAt: payload.exportedAt || "未知",
+                metadata: payload.metadata || {},
+            });
+        } catch (error: any) {
+            return c.json({ ok: false, error: error.message || "读取备份文件失败" }, 500);
+        }
+    }));
+
+    // 5. POST /backup/restore-from-storage —— 从云端选定的一份备份文件恢复
     app.post("/restore-from-storage", adminOnly(async (c: AppContext) => {
         const db = c.get("db");
         const env = c.get("env");
@@ -413,7 +469,7 @@ export function BackupService(): Hono {
         }
     }));
 
-    // 5. POST /backup/import —— 从上传的本地文件恢复全量数据
+    // 6. POST /backup/import —— 从上传的本地文件恢复全量数据
     app.post("/import", adminOnly(async (c: AppContext) => {
         const db = c.get("db");
         const cacheManager = c.get("cache");
