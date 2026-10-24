@@ -1,4 +1,4 @@
-import { inArray } from "drizzle-orm";
+import { inArray, desc } from "drizzle-orm";
 import { Hono } from "hono";
 import type { AppContext } from "../core/hono-types";
 import { adminOnly } from "../core/route-boundaries";
@@ -16,11 +16,11 @@ import {
     visitStats,
 } from "../db/schema";
 import { createEnvDriverIfConfigured } from "../utils/storage-drivers";
-import { driverForRow } from "../utils/storage-manager";
+import { driverForRow, DEFAULT_STORAGE_ID } from "../utils/storage-manager";
 
 const BACKUP_SCHEMA_VERSION = 1;
 const MAX_CLOUD_BACKUPS = 3; // 云端最多保留 3 份备份
-const BACKUP_DIR_NAME = "backups"; // 专门独立的备份归档目录
+const BACKUP_DIR_NAME = "backups"; // 专属备份归档目录
 const CLOUD_BACKUPS_CACHE_KEY = "cloud_backups_list";
 
 /** 获取当前系统可用的最佳存储驱动并规划备份目录 */
@@ -30,15 +30,27 @@ async function getActiveStorageDriver(env: Env, db: any) {
     if (active) {
         const driver = await driverForRow(env, active);
         const folder = active.folder ? `${active.folder}/${BACKUP_DIR_NAME}` : BACKUP_DIR_NAME;
-        return { driver, folder, name: active.name, bucket: active.bucket };
+        return { driver, folder, name: active.name, bucket: active.bucket, id: active.id };
     }
     const envDriver = createEnvDriverIfConfigured(env);
     if (envDriver) {
         const cleanEnvFolder = envDriver.folder.replace(/images\/?$/, "");
         const folder = cleanEnvFolder ? `${cleanEnvFolder}/${BACKUP_DIR_NAME}` : BACKUP_DIR_NAME;
-        return { driver: envDriver.driver, folder, name: "环境变量默认存储", bucket: env.S3_BUCKET || "default" };
+        return { driver: envDriver.driver, folder, name: "环境变量默认存储", bucket: env.S3_BUCKET || "default", id: DEFAULT_STORAGE_ID };
     }
     return null;
+}
+
+/** 智能净化用户输入的云端文件路径，去除冗余的桶名或存储名前缀 */
+function cleanBackupObjectKey(rawKey: string, bucketName?: string, storageName?: string): string {
+    let key = rawKey.trim().replace(/^\/+/, "");
+    if (storageName && key.startsWith(`${storageName}/`)) {
+        key = key.slice(storageName.length + 1).replace(/^\/+/, "");
+    }
+    if (bucketName && key.startsWith(`${bucketName}/`)) {
+        key = key.slice(bucketName.length + 1).replace(/^\/+/, "");
+    }
+    return key;
 }
 
 export function BackupService(): Hono {
@@ -109,7 +121,7 @@ export function BackupService(): Hono {
         };
     }
 
-    // 执行数据恢复核心逻辑（拓扑分批安全插入）
+    // 执行数据恢复核心逻辑（彻底解决 SQLite / D1 too many SQL variables 报错）
     async function executeRestore(db: any, cacheManager: any, payload: any) {
         if (!payload || !payload.data || payload.app !== "rin") {
             throw new Error("无效的备份文件结构，请确保使用的是 Rin 导出的备份包");
@@ -117,8 +129,11 @@ export function BackupService(): Hono {
 
         const data = payload.data;
 
-        async function chunkedInsert<T extends Record<string, any>>(table: any, rows: T[], chunkSize = 30) {
+        // 核心加固：动态计算列数，单次 SQL 变量严格保持在 30 以内，绝不超标
+        async function safeInsert<T extends Record<string, any>>(table: any, rows: T[]) {
             if (!rows || rows.length === 0) return;
+            const colCount = Math.max(1, Object.keys(rows[0]).length);
+            const chunkSize = Math.max(1, Math.floor(30 / colCount));
             for (let i = 0; i < rows.length; i += chunkSize) {
                 const chunk = rows.slice(i, i + chunkSize);
                 await db.insert(table).values(chunk as any);
@@ -127,7 +142,7 @@ export function BackupService(): Hono {
 
         const parseDate = (d: any) => (d ? new Date(d) : new Date());
 
-        // 1. 清理原有数据（按外键依赖逆序）
+        // 1. 清理原有数据（按外键依赖逆序安全清理）
         await db.delete(feedHashtags);
         await db.delete(comments);
         await db.delete(visitStats);
@@ -140,9 +155,9 @@ export function BackupService(): Hono {
         await db.delete(cache).where(inArray(cache.type, ["client.config", "server.config"]));
         await db.delete(users);
 
-        // 2. 依次按依赖关系恢复
+        // 2. 依次按依赖关系安全恢复
         if (data.users?.length) {
-            await chunkedInsert(users, data.users.map((u: any) => ({
+            await safeInsert(users, data.users.map((u: any) => ({
                 ...u,
                 createdAt: parseDate(u.createdAt),
                 updatedAt: parseDate(u.updatedAt),
@@ -150,7 +165,7 @@ export function BackupService(): Hono {
         }
 
         if (data.hashtags?.length) {
-            await chunkedInsert(hashtags, data.hashtags.map((h: any) => ({
+            await safeInsert(hashtags, data.hashtags.map((h: any) => ({
                 ...h,
                 createdAt: parseDate(h.createdAt),
                 updatedAt: parseDate(h.updatedAt),
@@ -158,7 +173,7 @@ export function BackupService(): Hono {
         }
 
         if (data.feeds?.length) {
-            await chunkedInsert(feeds, data.feeds.map((f: any) => ({
+            await safeInsert(feeds, data.feeds.map((f: any) => ({
                 ...f,
                 createdAt: parseDate(f.createdAt),
                 updatedAt: parseDate(f.updatedAt),
@@ -166,7 +181,7 @@ export function BackupService(): Hono {
         }
 
         if (data.feedHashtags?.length) {
-            await chunkedInsert(feedHashtags, data.feedHashtags.map((fh: any) => ({
+            await safeInsert(feedHashtags, data.feedHashtags.map((fh: any) => ({
                 ...fh,
                 createdAt: parseDate(fh.createdAt),
                 updatedAt: parseDate(fh.updatedAt),
@@ -174,7 +189,7 @@ export function BackupService(): Hono {
         }
 
         if (data.comments?.length) {
-            await chunkedInsert(comments, data.comments.map((cm: any) => ({
+            await safeInsert(comments, data.comments.map((cm: any) => ({
                 ...cm,
                 createdAt: parseDate(cm.createdAt),
                 updatedAt: parseDate(cm.updatedAt),
@@ -182,7 +197,7 @@ export function BackupService(): Hono {
         }
 
         if (data.moments?.length) {
-            await chunkedInsert(moments, data.moments.map((m: any) => ({
+            await safeInsert(moments, data.moments.map((m: any) => ({
                 ...m,
                 createdAt: parseDate(m.createdAt),
                 updatedAt: parseDate(m.updatedAt),
@@ -190,7 +205,7 @@ export function BackupService(): Hono {
         }
 
         if (data.friends?.length) {
-            await chunkedInsert(friends, data.friends.map((fr: any) => ({
+            await safeInsert(friends, data.friends.map((fr: any) => ({
                 ...fr,
                 createdAt: parseDate(fr.createdAt),
                 updatedAt: parseDate(fr.updatedAt),
@@ -198,7 +213,7 @@ export function BackupService(): Hono {
         }
 
         if (data.storages?.length) {
-            await chunkedInsert(storages, data.storages.map((s: any) => ({
+            await safeInsert(storages, data.storages.map((s: any) => ({
                 ...s,
                 createdAt: parseDate(s.createdAt),
                 updatedAt: parseDate(s.updatedAt),
@@ -206,14 +221,14 @@ export function BackupService(): Hono {
         }
 
         if (data.storageFiles?.length) {
-            await chunkedInsert(storageFiles, data.storageFiles.map((sf: any) => ({
+            await safeInsert(storageFiles, data.storageFiles.map((sf: any) => ({
                 ...sf,
                 createdAt: parseDate(sf.createdAt),
             })));
         }
 
         if (data.configs?.length) {
-            await chunkedInsert(cache, data.configs.map((cf: any) => ({
+            await safeInsert(cache, data.configs.map((cf: any) => ({
                 ...cf,
                 createdAt: parseDate(cf.createdAt),
                 updatedAt: parseDate(cf.updatedAt),
@@ -221,7 +236,7 @@ export function BackupService(): Hono {
         }
 
         if (data.visitStats?.length) {
-            await chunkedInsert(visitStats, data.visitStats.map((vs: any) => ({
+            await safeInsert(visitStats, data.visitStats.map((vs: any) => ({
                 ...vs,
                 updatedAt: parseDate(vs.updatedAt),
             })));
@@ -314,12 +329,15 @@ export function BackupService(): Hono {
                 backupList = [];
             }
 
-            backupList.unshift({
+            const newEntry = {
                 key: objectKey,
                 filename: fileName,
                 createdAt: snapshot.exportedAt,
                 metadata: snapshot.metadata,
-            });
+            };
+
+            backupList = backupList.filter((b) => b.key !== objectKey);
+            backupList.unshift(newEntry);
 
             let prunedCount = 0;
             if (backupList.length > MAX_CLOUD_BACKUPS) {
@@ -335,7 +353,7 @@ export function BackupService(): Hono {
 
             await target.driver.put(indexKey, JSON.stringify(backupList, null, 2), "application/json");
 
-            // 双重本地索引备份：存入 cache 表，保证即便云端 index.json 读取受阻也能秒级恢复
+            // 双重本地索引备份：存入 cache 表，保证即便云端 index.json 偶发读取受阻也能秒级恢复
             await cacheManager.set(CLOUD_BACKUPS_CACHE_KEY, backupList).catch(() => {});
 
             return c.json({
@@ -402,9 +420,9 @@ export function BackupService(): Hono {
         const db = c.get("db");
         const env = c.get("env");
         const body = (await c.req.json().catch(() => ({}))) as { key?: string };
-        const key = body.key?.trim();
-        if (!key) {
-            return c.json({ ok: false, error: "请输入备份文件路径" }, 400);
+        const rawKey = body.key?.trim();
+        if (!rawKey) {
+            return c.json({ ok: false, error: "请输入备份文件完整路径" }, 400);
         }
 
         const target = await getActiveStorageDriver(env, db);
@@ -412,10 +430,19 @@ export function BackupService(): Hono {
             return c.json({ ok: false, error: "未配置存储桶" }, 400);
         }
 
+        const key = cleanBackupObjectKey(rawKey, target.bucket, target.name);
+
+        if (!key.endsWith(".json")) {
+            return c.json({
+                ok: false,
+                error: `请输入以 .json 结尾的完整文件名，例如：backups/rin-backup-2026-10-24T01-43-36.json（您当前输入的是: ${rawKey}）`,
+            }, 400);
+        }
+
         try {
             const fileRes = await target.driver.get(key);
             if (!fileRes || !fileRes.ok) {
-                return c.json({ ok: false, error: `在存储桶中未找到文件: ${key}` }, 404);
+                return c.json({ ok: false, error: `在存储桶中未找到文件: ${key}（请确认路径与文件名拼写正确）` }, 404);
             }
             const payload = JSON.parse(await fileRes.text());
             if (!payload || payload.app !== "rin" || !payload.data) {
@@ -441,7 +468,8 @@ export function BackupService(): Hono {
         const cacheManager = c.get("cache");
 
         const body = (await c.req.json().catch(() => ({}))) as { key?: string };
-        if (!body.key) {
+        const rawKey = body.key?.trim();
+        if (!rawKey) {
             return c.json({ ok: false, error: "缺少备份文件路径" }, 400);
         }
 
@@ -450,10 +478,12 @@ export function BackupService(): Hono {
             return c.json({ ok: false, error: "存储驱动未就绪" }, 400);
         }
 
+        const key = cleanBackupObjectKey(rawKey, target.bucket, target.name);
+
         try {
-            const fileRes = await target.driver.get(body.key);
+            const fileRes = await target.driver.get(key);
             if (!fileRes || !fileRes.ok) {
-                return c.json({ ok: false, error: "无法从存储桶读取指定的备份文件" }, 404);
+                return c.json({ ok: false, error: `无法从存储桶读取指定的备份文件: ${key}` }, 404);
             }
 
             const payload = JSON.parse(await fileRes.text());
