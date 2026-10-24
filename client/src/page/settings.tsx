@@ -461,7 +461,7 @@ export function Settings() {
         setRestoreConfirmModal({
           open: true,
           source: "github",
-          githubPath: data.path,
+          githubPath: data.path || data.key || item.path,
           filename: data.filename,
           exportedAt: data.exportedAt,
           counts: data.metadata?.counts || {},
@@ -1497,7 +1497,7 @@ export function Settings() {
                       setRestoreConfirmModal({
                         open: true,
                         source: "cloud",
-                        cloudKey: data.key,
+                        cloudKey: data.key || data.path || key,
                         filename: data.filename,
                         exportedAt: data.exportedAt,
                         counts: data.metadata?.counts || {},
