@@ -92,7 +92,11 @@ export function Settings() {
     loading: boolean;
     items: any[];
     target: string;
+    error?: string;
   }>({ open: false, loading: false, items: [], target: "" });
+
+  // 3.1 手动输入云端路径状态
+  const [manualCloudKey, setManualCloudKey] = useState("");
 
   // 4. 恢复前确认弹窗（包含待恢复数据预览）
   const [restoreConfirmModal, setRestoreConfirmModal] = useState<{
@@ -268,6 +272,7 @@ export function Settings() {
             target: data.target,
             counts: data.metadata?.counts,
           });
+          setManualCloudKey(data.path);
         }
       }
     } catch (e: any) {
@@ -291,7 +296,11 @@ export function Settings() {
           loading: false,
           items: data.items || [],
           target: data.target || "云端存储桶",
+          error: data.error,
         });
+        if (data.items && data.items.length > 0 && !manualCloudKey) {
+          setManualCloudKey(data.items[0].key);
+        }
       }
     } catch (e: any) {
       showAlert(`读取异常: ${e.message}`);
@@ -1038,7 +1047,7 @@ export function Settings() {
         <div className="flex flex-col items-start w-full">
           <h1 className="text-xl font-bold tracking-[-0.02em] t-primary">从云端存储桶恢复数据</h1>
           <p className="mt-1 text-sm text-neutral-500">
-            当前存储桶（{cloudBackupsModal.target}）中最多保留的 3 份历史快照，点击即可选择恢复：
+            当前存储桶（{cloudBackupsModal.target}）历史快照列表：
           </p>
 
           <div className="mt-4 w-full max-h-80 overflow-y-auto space-y-3">
@@ -1048,7 +1057,12 @@ export function Settings() {
                 <span>正在读取存储桶...</span>
               </div>
             ) : cloudBackupsModal.items.length === 0 ? (
-              <p className="p-8 text-center text-sm text-neutral-400">存储桶中暂无任何备份文件（backups/index.json 为空）</p>
+              <div className="p-4 rounded-xl bg-secondary text-sm text-neutral-500 space-y-2">
+                <p>存储桶索引暂未读取到列表，但您的备份文件依然保存在存储桶中。</p>
+                {cloudBackupsModal.error ? (
+                  <p className="text-xs text-amber-500 font-mono">调试信息: {cloudBackupsModal.error}</p>
+                ) : null}
+              </div>
             ) : (
               cloudBackupsModal.items.map((item, idx) => (
                 <div
@@ -1068,6 +1082,54 @@ export function Settings() {
                 </div>
               ))
             )}
+          </div>
+
+          {/* 手动直接指定备份文件路径恢复兜底 */}
+          <div className="mt-5 w-full pt-4 border-t border-black/5 dark:border-white/5 space-y-2">
+            <p className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
+              或者直接指定云端备份文件路径恢复：
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="例如：backups/rin-backup-2026-10-24T01-43-36.json"
+                value={manualCloudKey}
+                onChange={(e) => setManualCloudKey(e.target.value)}
+                className="w-full rounded-xl border border-black/10 bg-w px-3 py-2 text-xs font-mono t-primary outline-none focus:border-theme dark:border-white/10"
+              />
+              <Button
+                title={backupActionLoading ? "读取中..." : "读取并恢复"}
+                disabled={backupActionLoading}
+                onClick={async () => {
+                  const key = manualCloudKey.trim();
+                  if (!key) {
+                    showAlert("请输入云端备份文件完整路径");
+                    return;
+                  }
+                  setBackupActionLoading(true);
+                  try {
+                    const { data, error } = await client.backup.inspectStorageBackup(key);
+                    if (error || !data || !data.ok) {
+                      showAlert(`未能读取到备份文件: ${error?.value || "路径错误或文件不存在"}`);
+                    } else {
+                      setCloudBackupsModal({ ...cloudBackupsModal, open: false });
+                      setRestoreConfirmModal({
+                        open: true,
+                        source: "cloud",
+                        cloudKey: data.key,
+                        filename: data.filename,
+                        exportedAt: data.exportedAt,
+                        counts: data.metadata?.counts || {},
+                      });
+                    }
+                  } catch (e: any) {
+                    showAlert(`读取失败: ${e.message}`);
+                  } finally {
+                    setBackupActionLoading(false);
+                  }
+                }}
+              />
+            </div>
           </div>
 
           <div className="mt-6 flex w-full justify-end">
@@ -1118,7 +1180,7 @@ export function Settings() {
         ) : null}
       </Modal>
 
-      {/* WordPress 导入弹窗保持不变 */}
+      {/* WordPress 导入弹窗 */}
       <Modal
         isOpen={isOpen}
         onRequestClose={() => setIsOpen(false)}
