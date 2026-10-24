@@ -72,9 +72,10 @@ export function Settings() {
   // 1. 备份前确认弹窗
   const [backupConfirmModal, setBackupConfirmModal] = useState<{
     open: boolean;
-    type: "local" | "cloud";
+    type: "local" | "cloud" | "github";
     previewData?: any;
     targetStorage?: any;
+    targetGitHub?: any;
   }>({ open: false, type: "local" });
 
   // 2. 备份成功通知弹窗
@@ -84,9 +85,10 @@ export function Settings() {
     path: string;
     target: string;
     counts: any;
+    extraNote?: string;
   } | null>(null);
 
-  // 3. 云端历史备份选择列表弹窗
+  // 3. 存储桶备份选择列表弹窗
   const [cloudBackupsModal, setCloudBackupsModal] = useState<{
     open: boolean;
     loading: boolean;
@@ -95,15 +97,50 @@ export function Settings() {
     error?: string;
   }>({ open: false, loading: false, items: [], target: "" });
 
-  // 3.1 手动输入云端路径状态
   const [manualCloudKey, setManualCloudKey] = useState("backups/rin-backup-2026-10-24T01-43-36.json");
+
+  // 3.1 GitHub 备份选择列表弹窗
+  const [githubBackupsModal, setGithubBackupsModal] = useState<{
+    open: boolean;
+    loading: boolean;
+    items: any[];
+    target: string;
+    branch: string;
+  }>({ open: false, loading: false, items: [], target: "", branch: "main" });
+
+  // 3.2 GitHub 备份配置管理弹窗
+  const [githubConfigModal, setGithubConfigModal] = useState<{
+    open: boolean;
+    owner: string;
+    repo: string;
+    branch: string;
+    path: string;
+    token: string;
+    hasToken: boolean;
+    configured: boolean;
+    saving: boolean;
+    testing: boolean;
+    testResult?: string;
+  }>({
+    open: false,
+    owner: "",
+    repo: "",
+    branch: "main",
+    path: "backups",
+    token: "",
+    hasToken: false,
+    configured: false,
+    saving: false,
+    testing: false,
+  });
 
   // 4. 恢复前确认弹窗（包含待恢复数据预览）
   const [restoreConfirmModal, setRestoreConfirmModal] = useState<{
     open: boolean;
-    source: "local" | "cloud";
+    source: "local" | "cloud" | "github";
     localFile?: File | null;
     cloudKey?: string;
+    githubPath?: string;
     filename: string;
     exportedAt: string;
     counts: any;
@@ -223,7 +260,7 @@ export function Settings() {
   // ================= 备份 & 恢复处理函数 =================
 
   // 1. 点击触发前置预览与确认弹窗
-  const openBackupConfirm = async (type: "local" | "cloud") => {
+  const openBackupConfirm = async (type: "local" | "cloud" | "github") => {
     setBackupActionLoading(true);
     try {
       const { data } = await client.backup.getPreview();
@@ -232,6 +269,7 @@ export function Settings() {
         type,
         previewData: data?.preview,
         targetStorage: data?.targetStorage,
+        targetGitHub: data?.targetGitHub,
       });
     } catch {
       setBackupConfirmModal({ open: true, type });
@@ -260,10 +298,10 @@ export function Settings() {
             counts: backupConfirmModal.previewData,
           });
         }
-      } else {
+      } else if (type === "cloud") {
         const { data, error } = await client.backup.exportToStorage();
         if (error || !data || !data.ok) {
-          showAlert(`云端备份失败: ${error?.value || "存储桶写入异常"}`);
+          showAlert(`存储桶备份失败: ${error?.value || "写入异常"}`);
         } else {
           setBackupSuccessModal({
             open: true,
@@ -274,6 +312,20 @@ export function Settings() {
           });
           setManualCloudKey(data.path);
         }
+      } else if (type === "github") {
+        const { data, error } = await client.backup.exportToGitHub();
+        if (error || !data || !data.ok) {
+          showAlert(`GitHub 备份失败: ${error?.value || "提交异常，请检查 Token 权限"}`);
+        } else {
+          setBackupSuccessModal({
+            open: true,
+            filename: data.filename,
+            path: data.path,
+            target: data.target,
+            counts: data.metadata?.counts,
+            extraNote: `Commit SHA: ${data.commitSha}`,
+          });
+        }
       }
     } catch (e: any) {
       showAlert(`备份过程中出错: ${e.message}`);
@@ -282,13 +334,13 @@ export function Settings() {
     }
   };
 
-  // 3. 打开云端备份历史选择列表
+  // 3. 打开存储桶备份历史选择列表
   const openCloudBackupsList = async () => {
     setCloudBackupsModal({ open: true, loading: true, items: [], target: "" });
     try {
       const { data, error } = await client.backup.listStorageBackups();
       if (error || !data || !data.ok) {
-        showAlert(error?.value || "获取云端备份列表失败，请检查存储桶连接");
+        showAlert(error?.value || "获取存储桶备份列表失败");
         setCloudBackupsModal({ open: false, loading: false, items: [], target: "" });
       } else {
         setCloudBackupsModal({
@@ -308,7 +360,52 @@ export function Settings() {
     }
   };
 
-  // 4. 选择本地 JSON 文件 -> 客户端预解析 -> 弹出数据核对窗口
+  // 3.1 打开 GitHub 备份列表
+  const openGitHubBackupsList = async () => {
+    setGithubBackupsModal({ open: true, loading: true, items: [], target: "", branch: "main" });
+    try {
+      const { data, error } = await client.backup.listGitHubBackups();
+      if (error || !data || !data.ok) {
+        showAlert(error?.value || "获取 GitHub 备份列表失败，请先确认 GitHub 配置是否正确");
+        setGithubBackupsModal({ open: false, loading: false, items: [], target: "", branch: "main" });
+      } else {
+        setGithubBackupsModal({
+          open: true,
+          loading: false,
+          items: data.items || [],
+          target: data.target,
+          branch: data.branch,
+        });
+      }
+    } catch (e: any) {
+      showAlert(`读取 GitHub 异常: ${e.message}`);
+      setGithubBackupsModal({ open: false, loading: false, items: [], target: "", branch: "main" });
+    }
+  };
+
+  // 3.2 打开 GitHub 备份配置弹窗
+  const openGitHubConfigDialog = async () => {
+    setGithubConfigModal((prev) => ({ ...prev, open: true, testResult: undefined }));
+    try {
+      const { data } = await client.backup.getGitHubConfig();
+      if (data) {
+        setGithubConfigModal({
+          open: true,
+          owner: data.owner || "",
+          repo: data.repo || "",
+          branch: data.branch || "main",
+          path: data.path || "backups",
+          token: "",
+          hasToken: data.hasToken,
+          configured: data.configured,
+          saving: false,
+          testing: false,
+        });
+      }
+    } catch {}
+  };
+
+  // 4. 选择本地 JSON 文件恢复
   const handleSelectLocalFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -339,7 +436,7 @@ export function Settings() {
     }
   };
 
-  // 5. 点击云端列表项 -> 弹出核对确认窗口
+  // 5. 点击存储桶快照项核对
   const handleSelectCloudBackupItem = (item: any) => {
     setCloudBackupsModal({ ...cloudBackupsModal, open: false });
     setRestoreConfirmModal({
@@ -352,10 +449,35 @@ export function Settings() {
     });
   };
 
+  // 5.1 点击 GitHub 快照项核对
+  const handleSelectGitHubBackupItem = async (item: any) => {
+    setGithubBackupsModal({ ...githubBackupsModal, open: false });
+    setBackupActionLoading(true);
+    try {
+      const { data, error } = await client.backup.inspectGitHubBackup(item.path);
+      if (error || !data || !data.ok) {
+        showAlert(`未能读取 GitHub 备份内容: ${error?.value || "文件解析错误"}`);
+      } else {
+        setRestoreConfirmModal({
+          open: true,
+          source: "github",
+          githubPath: data.path,
+          filename: data.filename,
+          exportedAt: data.exportedAt,
+          counts: data.metadata?.counts || {},
+        });
+      }
+    } catch (e: any) {
+      showAlert(`读取异常: ${e.message}`);
+    } finally {
+      setBackupActionLoading(false);
+    }
+  };
+
   // 6. 最终确认执行恢复操作
   const executeConfirmedRestore = async () => {
     if (!restoreConfirmModal) return;
-    const { source, localFile, cloudKey } = restoreConfirmModal;
+    const { source, localFile, cloudKey, githubPath } = restoreConfirmModal;
     setRestoreConfirmModal(null);
     setBackupActionLoading(true);
 
@@ -369,6 +491,10 @@ export function Settings() {
         resError = error;
       } else if (source === "cloud" && cloudKey) {
         const { data, error } = await client.backup.restoreFromStorage(cloudKey);
+        resData = data;
+        resError = error;
+      } else if (source === "github" && githubPath) {
+        const { data, error } = await client.backup.restoreFromGitHub(githubPath);
         resData = data;
         resError = error;
       }
@@ -814,14 +940,49 @@ export function Settings() {
 
           <ItemTitle title={t("settings.maintenance.title")} />
 
+          {/* ============ ★ GitHub 异地私有仓库备份与恢复 ============ */}
+          <div className="w-full">
+            <SettingsCard tone="default">
+              <SettingsCardRow
+                header={
+                  <SettingsCardHeader
+                    title="GitHub 私有仓库自动备份（极度推荐 • 异地容灾）"
+                    description="将博客所有数据直接作为一个版本提交到您的 GitHub 私有仓库中。完全独立于 Cloudflare 架构，具备永久提交历史，即便主机或域名丢失，数据依然安全无虞。"
+                    badge={<SettingsBadge tone="success">跨云独立容灾</SettingsBadge>}
+                  />
+                }
+                action={
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      secondary
+                      title="配置 GitHub 仓库"
+                      onClick={openGitHubConfigDialog}
+                    />
+                    <Button
+                      title={backupActionLoading ? "请稍候..." : "备份到 GitHub 仓库"}
+                      onClick={() => openBackupConfirm("github")}
+                      disabled={backupActionLoading}
+                    />
+                    <Button
+                      secondary
+                      title="从 GitHub 恢复"
+                      onClick={openGitHubBackupsList}
+                      disabled={backupActionLoading}
+                    />
+                  </div>
+                }
+              />
+            </SettingsCard>
+          </div>
+
           {/* ============ ★ 一键全量数据备份模块 ============ */}
           <div className="w-full">
             <SettingsCard>
               <SettingsCardRow
                 header={
                   <SettingsCardHeader
-                    title="数据全量备份（跨账号/防封归档）"
-                    description="将包含所有文章、草稿、分类、评论、动态、友链、站点设置与已绑定存储配置全部打包。在执行前会展示数据概况与备份目标路径确认。"
+                    title="数据全量备份（本地 / 存储桶）"
+                    description="将所有文章、草稿、分类、评论、动态、友链、站点设置打包。支持直接下载到手机/电脑，或存入已绑定的存储桶（保留最近 3 份）。"
                   />
                 }
                 action={
@@ -833,7 +994,7 @@ export function Settings() {
                     />
                     <Button
                       secondary
-                      title={backupActionLoading ? "请稍候..." : "备份到云端存储桶"}
+                      title={backupActionLoading ? "请稍候..." : "备份到存储桶"}
                       onClick={() => openBackupConfirm("cloud")}
                       disabled={backupActionLoading}
                     />
@@ -843,14 +1004,14 @@ export function Settings() {
             </SettingsCard>
           </div>
 
-          {/* ============ ★ 全量灾难恢复模块（本地文件 / 云端存储双选） ============ */}
+          {/* ============ ★ 全量灾难恢复模块（本地 / 存储桶） ============ */}
           <div className="w-full">
             <SettingsCard tone="warning">
               <SettingsCardRow
                 header={
                   <SettingsCardHeader
-                    title="数据恢复与灾难迁移（本地 / 云端双选）"
-                    description="支持选择本地 .json 备份包恢复，或直接从当前绑定的存储桶（S3/R2/WebDAV）恢复历史备份。恢复前会弹窗核对数据详情与二次确认。"
+                    title="数据恢复与灾难迁移（本地 / 存储桶）"
+                    description="从本地 .json 文件恢复，或从当前绑定的存储桶恢复历史快照。"
                     badge={<SettingsBadge tone="warning">覆盖式写入</SettingsBadge>}
                   />
                 }
@@ -870,7 +1031,7 @@ export function Settings() {
                     />
                     <Button
                       secondary
-                      title="从云端存储恢复"
+                      title="从存储桶恢复"
                       onClick={openCloudBackupsList}
                       disabled={backupActionLoading}
                     />
@@ -963,12 +1124,18 @@ export function Settings() {
       >
         <div className="flex flex-col items-start w-full">
           <h1 className="text-xl font-bold tracking-[-0.02em] t-primary">
-            {backupConfirmModal.type === "local" ? "确认导出本地备份？" : "确认备份到云端存储桶？"}
+            {backupConfirmModal.type === "local"
+              ? "确认导出本地备份？"
+              : backupConfirmModal.type === "github"
+                ? "确认备份到 GitHub 私有仓库？"
+                : "确认备份到云端存储桶？"}
           </h1>
           <p className="mt-2 text-sm text-neutral-500">
             {backupConfirmModal.type === "local"
               ? "系统将把博客全部数据打包生成为一个 JSON 快照，并通过浏览器直接下载到您的电脑或手机中。"
-              : "系统将把博客全部数据打包，并上传归档到您当前已绑定的云端存储桶中（自动保留最新的 3 份备份，旧备份自动清理淘汰）。"}
+              : backupConfirmModal.type === "github"
+                ? "系统将把博客全部数据打包成快照，并通过 GitHub API 自动提交（Commit）到您绑定的 GitHub 私有仓库中。"
+                : "系统将把博客全部数据打包，并上传归档到您当前已绑定的云端存储桶中（自动保留最新的 3 份备份，旧备份自动清理淘汰）。"}
           </p>
 
           <div className="mt-4 w-full rounded-xl bg-secondary p-4 space-y-2 text-sm t-primary">
@@ -984,7 +1151,9 @@ export function Settings() {
               <p>📍 备份目标: <span className="font-semibold t-primary">
                 {backupConfirmModal.type === "local"
                   ? "本地设备（浏览器下载文件）"
-                  : `${backupConfirmModal.targetStorage?.name || "绑定的存储桶"} -> ${backupConfirmModal.targetStorage?.folder || "backups"}/`}
+                  : backupConfirmModal.type === "github"
+                    ? `GitHub 仓库: ${backupConfirmModal.targetGitHub?.repo || "未配置"}`
+                    : `${backupConfirmModal.targetStorage?.name || "绑定的存储桶"} -> ${backupConfirmModal.targetStorage?.folder || "backups"}/`}
               </span></p>
             </div>
           </div>
@@ -1017,8 +1186,11 @@ export function Settings() {
 
             <div className="mt-4 w-full rounded-xl bg-secondary p-4 space-y-2 text-xs sm:text-sm t-primary">
               <p>🏷️ <b>备份文件名：</b> <span className="font-mono">{backupSuccessModal.filename}</span></p>
-              <p>📦 <b>目标存储：</b> <span>{backupSuccessModal.target}</span></p>
+              <p>📦 <b>目标归档：</b> <span>{backupSuccessModal.target}</span></p>
               <p>📍 <b>存储路径：</b> <span className="font-mono break-all">{backupSuccessModal.path}</span></p>
+              {backupSuccessModal.extraNote ? (
+                <p>🔗 <b>附加信息：</b> <span className="font-mono">{backupSuccessModal.extraNote}</span></p>
+              ) : null}
               {backupSuccessModal.counts ? (
                 <div className="pt-2 border-t border-black/5 dark:border-white/5 grid grid-cols-2 gap-1 text-neutral-500">
                   <span>包含文章: {backupSuccessModal.counts.feeds ?? 0} 篇</span>
@@ -1036,16 +1208,228 @@ export function Settings() {
         ) : null}
       </Modal>
 
-      {/* 3. 云端备份历史选择列表弹窗 */}
+      {/* 3.1 GitHub 备份配置管理弹窗 */}
       <Modal
-        isOpen={cloudBackupsModal.open}
-        onRequestClose={() => setCloudBackupsModal({ ...cloudBackupsModal, open: false })}
-        contentLabel="选择云端备份恢复"
+        isOpen={githubConfigModal.open}
+        onRequestClose={() => setGithubConfigModal({ ...githubConfigModal, open: false })}
+        contentLabel="配置 GitHub 私有备份仓库"
+        size="md"
+        panelClassName="p-6"
+      >
+        <div className="flex flex-col items-start w-full gap-3">
+          <div className="flex items-center gap-2">
+            <i className="ri-github-fill text-2xl t-primary" />
+            <h1 className="text-xl font-bold tracking-[-0.02em] t-primary">GitHub 私有仓库备份设置</h1>
+          </div>
+          <p className="text-xs text-neutral-500">
+            建议在 GitHub 创建一个 <b>Private（私有）</b> 仓库用于备份。访问令牌（PAT）将使用 AES-GCM 强加密保存在数据库中。
+          </p>
+
+          <div className="w-full space-y-3 mt-2">
+            <div>
+              <label className="text-xs font-semibold t-primary block mb-1">GitHub 用户名或组织名 (Owner)</label>
+              <input
+                type="text"
+                placeholder="例如：xmjerssss"
+                value={githubConfigModal.owner}
+                onChange={(e) => setGithubConfigModal({ ...githubConfigModal, owner: e.target.value })}
+                className="w-full rounded-xl border border-black/10 bg-w px-3 py-2 text-sm t-primary outline-none focus:border-theme dark:border-white/10"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold t-primary block mb-1">仓库名称 (Repo)</label>
+              <input
+                type="text"
+                placeholder="例如：blog-backups (必须为 Private 仓库)"
+                value={githubConfigModal.repo}
+                onChange={(e) => setGithubConfigModal({ ...githubConfigModal, repo: e.target.value })}
+                className="w-full rounded-xl border border-black/10 bg-w px-3 py-2 text-sm t-primary outline-none focus:border-theme dark:border-white/10"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs font-semibold t-primary block mb-1">分支 (Branch)</label>
+                <input
+                  type="text"
+                  placeholder="main"
+                  value={githubConfigModal.branch}
+                  onChange={(e) => setGithubConfigModal({ ...githubConfigModal, branch: e.target.value })}
+                  className="w-full rounded-xl border border-black/10 bg-w px-3 py-2 text-sm t-primary outline-none focus:border-theme dark:border-white/10"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold t-primary block mb-1">目录路径 (Path)</label>
+                <input
+                  type="text"
+                  placeholder="backups"
+                  value={githubConfigModal.path}
+                  onChange={(e) => setGithubConfigModal({ ...githubConfigModal, path: e.target.value })}
+                  className="w-full rounded-xl border border-black/10 bg-w px-3 py-2 text-sm t-primary outline-none focus:border-theme dark:border-white/10"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold t-primary block mb-1">
+                GitHub 个人访问令牌 (Personal Access Token)
+                {githubConfigModal.hasToken ? (
+                  <span className="ml-2 text-emerald-500 font-normal">（已加密保存，留空为不修改）</span>
+                ) : null}
+              </label>
+              <input
+                type="password"
+                placeholder={githubConfigModal.hasToken ? "••••••••••••••••" : "ghp_xxxxxxxxxxxxxxxxxxxx"}
+                value={githubConfigModal.token}
+                onChange={(e) => setGithubConfigModal({ ...githubConfigModal, token: e.target.value })}
+                className="w-full rounded-xl border border-black/10 bg-w px-3 py-2 text-sm font-mono t-primary outline-none focus:border-theme dark:border-white/10"
+              />
+              <p className="text-[11px] text-neutral-400 mt-1">
+                需要具有 <b>repo</b> 权限（或细粒度 Token 赋予目标私有仓库的 <b>Contents: Read and write</b> 权限）。
+              </p>
+            </div>
+
+            {githubConfigModal.testResult ? (
+              <p className="text-xs p-3 rounded-lg bg-secondary text-neutral-600 dark:text-neutral-300 font-mono">
+                {githubConfigModal.testResult}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="mt-4 flex w-full justify-between items-center">
+            <Button
+              secondary
+              title={githubConfigModal.testing ? "测试中..." : "测试连接"}
+              disabled={githubConfigModal.testing || githubConfigModal.saving}
+              onClick={async () => {
+                setGithubConfigModal((prev) => ({ ...prev, testing: true, testResult: "正在连接 GitHub 验证..." }));
+                try {
+                  const { data, error } = await client.backup.testGitHubConnection();
+                  if (error || !data || !data.ok) {
+                    setGithubConfigModal((prev) => ({
+                      ...prev,
+                      testing: false,
+                      testResult: `❌ 失败: ${error?.value || "无法连接仓库，请检查 Token 权限"}`,
+                    }));
+                  } else {
+                    setGithubConfigModal((prev) => ({
+                      ...prev,
+                      testing: false,
+                      testResult: `✅ ${data.message}`,
+                    }));
+                  }
+                } catch (e: any) {
+                  setGithubConfigModal((prev) => ({ ...prev, testing: false, testResult: `❌ 异常: ${e.message}` }));
+                }
+              }}
+            />
+
+            <div className="flex gap-2">
+              <Button secondary title="取消" onClick={() => setGithubConfigModal({ ...githubConfigModal, open: false })} />
+              <Button
+                title={githubConfigModal.saving ? "保存中..." : "保存配置"}
+                disabled={githubConfigModal.saving || githubConfigModal.testing}
+                onClick={async () => {
+                  if (!githubConfigModal.owner.trim() || !githubConfigModal.repo.trim()) {
+                    showAlert("请填写完整 GitHub 用户名和仓库名");
+                    return;
+                  }
+                  if (!githubConfigModal.hasToken && !githubConfigModal.token.trim()) {
+                    showAlert("请输入 GitHub Personal Access Token");
+                    return;
+                  }
+                  setGithubConfigModal((prev) => ({ ...prev, saving: true }));
+                  try {
+                    const { data, error } = await client.backup.saveGitHubConfig({
+                      owner: githubConfigModal.owner.trim(),
+                      repo: githubConfigModal.repo.trim(),
+                      branch: githubConfigModal.branch.trim(),
+                      path: githubConfigModal.path.trim(),
+                      token: githubConfigModal.token.trim() || undefined,
+                    });
+                    if (error || !data || !data.ok) {
+                      showAlert(`保存失败: ${error?.value || "写入异常"}`);
+                    } else {
+                      showAlert("GitHub 备份配置保存成功！");
+                      setGithubConfigModal((prev) => ({ ...prev, open: false, hasToken: true, configured: true }));
+                    }
+                  } catch (e: any) {
+                    showAlert(`保存异常: ${e.message}`);
+                  } finally {
+                    setGithubConfigModal((prev) => ({ ...prev, saving: false }));
+                  }
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* 3.2 GitHub 备份选择列表弹窗 */}
+      <Modal
+        isOpen={githubBackupsModal.open}
+        onRequestClose={() => setGithubBackupsModal({ ...githubBackupsModal, open: false })}
+        contentLabel="从 GitHub 仓库恢复"
         size="lg"
         panelClassName="p-6"
       >
         <div className="flex flex-col items-start w-full">
-          <h1 className="text-xl font-bold tracking-[-0.02em] t-primary">从云端存储桶恢复数据</h1>
+          <div className="flex items-center gap-2">
+            <i className="ri-github-fill text-2xl t-primary" />
+            <h1 className="text-xl font-bold tracking-[-0.02em] t-primary">从 GitHub 仓库恢复数据</h1>
+          </div>
+          <p className="mt-1 text-sm text-neutral-500">
+            仓库 <b>{githubBackupsModal.target}</b>（分支: {githubBackupsModal.branch}）中保存的快照：
+          </p>
+
+          <div className="mt-4 w-full max-h-80 overflow-y-auto space-y-3">
+            {githubBackupsModal.loading ? (
+              <div className="flex items-center justify-center p-8 text-neutral-400 gap-2">
+                <ReactLoading type="spin" color="#FC466B" width={20} height={20} />
+                <span>正在获取 GitHub 仓库快照...</span>
+              </div>
+            ) : githubBackupsModal.items.length === 0 ? (
+              <div className="p-4 rounded-xl bg-secondary text-sm text-neutral-500">
+                <p>该仓库指定目录中暂未发现任何备份快照文件（以 rin-backup- 开头的 json 文件）。</p>
+              </div>
+            ) : (
+              githubBackupsModal.items.map((item, idx) => (
+                <div
+                  key={item.sha || idx}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-black/10 dark:border-white/10 bg-secondary gap-3"
+                >
+                  <div className="min-w-0">
+                    <p className="font-mono text-sm font-semibold truncate t-primary">{item.filename}</p>
+                    <p className="text-xs text-neutral-400 mt-1">
+                      备份时间: {item.createdAt} · 大小: {Math.round((item.size || 0) / 1024)} KB · Commit SHA: {item.sha?.slice(0, 7)}
+                    </p>
+                  </div>
+                  <Button
+                    title="选择此备份"
+                    onClick={() => handleSelectGitHubBackupItem(item)}
+                  />
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="mt-6 flex w-full justify-end">
+            <Button secondary title="关闭" onClick={() => setGithubBackupsModal({ ...githubBackupsModal, open: false })} />
+          </div>
+        </div>
+      </Modal>
+
+      {/* 3.3 存储桶备份历史选择列表弹窗 */}
+      <Modal
+        isOpen={cloudBackupsModal.open}
+        onRequestClose={() => setCloudBackupsModal({ ...cloudBackupsModal, open: false })}
+        contentLabel="选择存储桶备份恢复"
+        size="lg"
+        panelClassName="p-6"
+      >
+        <div className="flex flex-col items-start w-full">
+          <h1 className="text-xl font-bold tracking-[-0.02em] t-primary">从存储桶恢复数据</h1>
           <p className="mt-1 text-sm text-neutral-500">
             当前存储桶（{cloudBackupsModal.target}）历史备份快照：
           </p>
@@ -1084,7 +1468,7 @@ export function Settings() {
           {/* 手动指定云端文件路径恢复兜底 */}
           <div className="mt-5 w-full pt-4 border-t border-black/5 dark:border-white/5 space-y-2">
             <p className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
-              或直接指定云端备份文件完整路径恢复：
+              或直接指定存储桶备份文件完整路径恢复：
             </p>
             <div className="flex gap-2">
               <input
@@ -1157,7 +1541,13 @@ export function Settings() {
 
             <div className="mt-4 w-full rounded-xl bg-secondary p-4 space-y-2 text-xs sm:text-sm t-primary">
               <p className="font-semibold text-xs uppercase tracking-wider text-theme">即将恢复的数据镜像详情：</p>
-              <p>📦 <b>恢复来源：</b> {restoreConfirmModal.source === "local" ? "本地上传文件" : "云端存储桶文件"}</p>
+              <p>📦 <b>恢复来源：</b> {
+                restoreConfirmModal.source === "local"
+                  ? "本地上传文件"
+                  : restoreConfirmModal.source === "github"
+                    ? "GitHub 仓库快照"
+                    : "云端存储桶文件"
+              }</p>
               <p>🏷️ <b>备份文件名：</b> <span className="font-mono">{restoreConfirmModal.filename}</span></p>
               <p>🕒 <b>备份生成时间：</b> <span>{new Date(restoreConfirmModal.exportedAt).toLocaleString()}</span></p>
               <div className="pt-2 border-t border-black/5 dark:border-white/5 grid grid-cols-2 gap-2 text-xs">
