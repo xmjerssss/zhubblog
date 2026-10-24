@@ -115,7 +115,7 @@ export function BackupService(): Hono {
             db.select().from(friends),
             db.select().from(comments),
             db.select().from(hashtags),
-            db.select().from(feedHashtagRows || feedHashtags),
+            db.select().from(feedHashtags),
             db.select().from(cache).where(inArray(cache.type, ["client.config", "server.config"])),
             db.select().from(storages),
             db.select().from(storageFiles),
