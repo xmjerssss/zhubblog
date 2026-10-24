@@ -23,7 +23,7 @@ const BACKUP_SCHEMA_VERSION = 1;
 const MAX_CLOUD_BACKUPS = 3;
 const BACKUP_DIR_NAME = "backups";
 const CLOUD_BACKUPS_CACHE_KEY = "cloud_backups_list";
-const GITHUB_BACKUP_CACHE_KEY = "github_backup_config";
+const GITHUB_BACKUP_CONFIG_KEY = "github_backup_config";
 
 interface StoredGitHubConfig {
     owner: string;
@@ -33,8 +33,8 @@ interface StoredGitHubConfig {
     path: string;
 }
 
-/** 获取并解密 GitHub 备份配置 */
-async function getGitHubBackupConfig(env: Env, cacheManager: any): Promise<{
+/** 获取并解密 GitHub 备份配置（从持久化 serverConfig 中读取） */
+async function getGitHubBackupConfig(env: Env, serverConfig: any): Promise<{
     owner: string;
     repo: string;
     branch: string;
@@ -42,10 +42,33 @@ async function getGitHubBackupConfig(env: Env, cacheManager: any): Promise<{
     path: string;
     configured: boolean;
 }> {
-    const raw = (await cacheManager.get(GITHUB_BACKUP_CACHE_KEY)) as StoredGitHubConfig | null;
-    if (!raw || !raw.owner || !raw.repo || !raw.tokenEnc) {
+    const rawVal = await serverConfig.get(GITHUB_BACKUP_CONFIG_KEY);
+    if (!rawVal) {
         return { owner: "", repo: "", branch: "main", token: "", path: "backups", configured: false };
     }
+
+    let raw: StoredGitHubConfig | null = null;
+    if (typeof rawVal === "string") {
+        try {
+            raw = JSON.parse(rawVal);
+        } catch {
+            return { owner: "", repo: "", branch: "main", token: "", path: "backups", configured: false };
+        }
+    } else if (typeof rawVal === "object") {
+        raw = rawVal as StoredGitHubConfig;
+    }
+
+    if (!raw || !raw.owner || !raw.repo || !raw.tokenEnc) {
+        return {
+            owner: raw?.owner || "",
+            repo: raw?.repo || "",
+            branch: raw?.branch || "main",
+            token: "",
+            path: raw?.path || "backups",
+            configured: false,
+        };
+    }
+
     try {
         const token = await decryptSecret(env, raw.tokenEnc);
         return {
@@ -56,8 +79,16 @@ async function getGitHubBackupConfig(env: Env, cacheManager: any): Promise<{
             path: (raw.path || "backups").trim().replace(/^\/+|\/+$/g, ""),
             configured: Boolean(raw.owner && raw.repo && token),
         };
-    } catch {
-        return { owner: raw.owner, repo: raw.repo, branch: raw.branch || "main", token: "", path: raw.path || "backups", configured: false };
+    } catch (err) {
+        console.error("[backup] decrypt github token error:", err);
+        return {
+            owner: raw.owner,
+            repo: raw.repo,
+            branch: raw.branch || "main",
+            token: "",
+            path: raw.path || "backups",
+            configured: false,
+        };
     }
 }
 
@@ -167,7 +198,6 @@ export function BackupService(): Hono {
 
         const data = payload.data;
 
-        // 动态计算列数，确保单次 SQL 变量数保持在 30 个以内
         async function safeInsert<T extends Record<string, any>>(table: any, rows: T[]) {
             if (!rows || rows.length === 0) return;
             const colCount = Math.max(1, Object.keys(rows[0]).length);
@@ -180,7 +210,7 @@ export function BackupService(): Hono {
 
         const parseDate = (d: any) => (d ? new Date(d) : new Date());
 
-        // 1. 清理原有数据（按外键依赖逆序清理）
+        // 1. 清理原有数据
         await db.delete(feedHashtags);
         await db.delete(comments);
         await db.delete(visitStats);
@@ -193,7 +223,7 @@ export function BackupService(): Hono {
         await db.delete(cache).where(inArray(cache.type, ["client.config", "server.config"]));
         await db.delete(users);
 
-        // 2. 依次按依赖关系安全恢复
+        // 2. 依次按依赖关系恢复
         if (data.users?.length) {
             await safeInsert(users, data.users.map((u: any) => ({
                 ...u,
@@ -280,7 +310,6 @@ export function BackupService(): Hono {
             })));
         }
 
-        // 清空缓存
         await cacheManager.clear();
     }
 
@@ -288,7 +317,7 @@ export function BackupService(): Hono {
     app.get("/preview", adminOnly(async (c: AppContext) => {
         const db = c.get("db");
         const env = c.get("env");
-        const cacheManager = c.get("cache");
+        const serverConfig = c.get("serverConfig");
 
         const [feedCount, commentCount, momentCount, friendCount, storageCount] = await Promise.all([
             db.select().from(feeds),
@@ -299,7 +328,7 @@ export function BackupService(): Hono {
         ]);
 
         const target = await getActiveStorageDriver(env, db);
-        const gh = await getGitHubBackupConfig(env, cacheManager);
+        const gh = await getGitHubBackupConfig(env, serverConfig);
 
         return c.json({
             ok: true,
@@ -346,7 +375,7 @@ export function BackupService(): Hono {
     app.post("/export-to-storage", adminOnly(async (c: AppContext) => {
         const db = c.get("db");
         const env = c.get("env");
-        const cacheManager = c.get("cache");
+        const serverConfig = c.get("serverConfig");
 
         const target = await getActiveStorageDriver(env, db);
         if (!target) {
@@ -398,7 +427,7 @@ export function BackupService(): Hono {
             }
 
             await target.driver.put(indexKey, JSON.stringify(backupList, null, 2), "application/json");
-            await cacheManager.set(CLOUD_BACKUPS_CACHE_KEY, backupList).catch(() => {});
+            await serverConfig.set(CLOUD_BACKUPS_CACHE_KEY, backupList, true).catch(() => {});
 
             return c.json({
                 ok: true,
@@ -419,7 +448,7 @@ export function BackupService(): Hono {
     app.get("/storage-list", adminOnly(async (c: AppContext) => {
         const db = c.get("db");
         const env = c.get("env");
-        const cacheManager = c.get("cache");
+        const serverConfig = c.get("serverConfig");
 
         const target = await getActiveStorageDriver(env, db);
         if (!target) {
@@ -438,12 +467,11 @@ export function BackupService(): Hono {
             }
         } catch (err: any) {
             readError = err?.message || String(err);
-            console.error("[backup] storage-list read error:", err);
         }
 
         if (items.length === 0) {
             try {
-                const cached = await cacheManager.get(CLOUD_BACKUPS_CACHE_KEY);
+                const cached = await serverConfig.get(CLOUD_BACKUPS_CACHE_KEY);
                 if (Array.isArray(cached) && cached.length > 0) {
                     items = cached;
                 }
@@ -580,11 +608,11 @@ export function BackupService(): Hono {
     // ★ 以下为 GitHub 专属备份与恢复 API
     // =========================================================================
 
-    // 7. GET /backup/github-config —— 获取 GitHub 备份配置（脱敏）
+    // 7. GET /backup/github-config —— 获取 GitHub 备份配置
     app.get("/github-config", adminOnly(async (c: AppContext) => {
         const env = c.get("env");
-        const cacheManager = c.get("cache");
-        const cfg = await getGitHubBackupConfig(env, cacheManager);
+        const serverConfig = c.get("serverConfig");
+        const cfg = await getGitHubBackupConfig(env, serverConfig);
 
         return c.json({
             ok: true,
@@ -597,10 +625,10 @@ export function BackupService(): Hono {
         });
     }));
 
-    // 8. POST /backup/github-config —— 保存/更新 GitHub 备份配置
+    // 8. POST /backup/github-config —— 保存/更新 GitHub 备份配置（立即写入持久化数据库）
     app.post("/github-config", adminOnly(async (c: AppContext) => {
         const env = c.get("env");
-        const cacheManager = c.get("cache");
+        const serverConfig = c.get("serverConfig");
 
         const body = (await c.req.json().catch(() => ({}))) as {
             owner?: string;
@@ -610,16 +638,20 @@ export function BackupService(): Hono {
             token?: string;
         };
 
-        const existing = (await cacheManager.get(GITHUB_BACKUP_CACHE_KEY)) as StoredGitHubConfig | null;
+        const existing = await getGitHubBackupConfig(env, serverConfig);
 
-        const owner = (body.owner !== undefined ? body.owner : existing?.owner || "").trim();
-        const repo = (body.repo !== undefined ? body.repo : existing?.repo || "").trim();
-        const branch = (body.branch !== undefined ? body.branch : existing?.branch || "main").trim() || "main";
-        const path = (body.path !== undefined ? body.path : existing?.path || "backups").trim().replace(/^\/+|\/+$/g, "");
+        const owner = (body.owner !== undefined ? body.owner : existing.owner).trim();
+        const repo = (body.repo !== undefined ? body.repo : existing.repo).trim();
+        const branch = (body.branch !== undefined ? body.branch : existing.branch || "main").trim() || "main";
+        const path = (body.path !== undefined ? body.path : existing.path || "backups").trim().replace(/^\/+|\/+$/g, "");
 
-        let tokenEnc = existing?.tokenEnc || "";
-        if (body.token?.trim()) {
-            tokenEnc = await encryptSecret(env, body.token.trim());
+        let tokenToEncrypt = body.token?.trim();
+        let tokenEnc = "";
+
+        if (tokenToEncrypt) {
+            tokenEnc = await encryptSecret(env, tokenToEncrypt);
+        } else if (existing.token) {
+            tokenEnc = await encryptSecret(env, existing.token);
         }
 
         if (!owner || !repo || !tokenEnc) {
@@ -634,7 +666,8 @@ export function BackupService(): Hono {
             tokenEnc,
         };
 
-        await cacheManager.set(GITHUB_BACKUP_CACHE_KEY, toSave);
+        // 立即持久化写入数据库
+        await serverConfig.set(GITHUB_BACKUP_CONFIG_KEY, JSON.stringify(toSave), true);
 
         return c.json({
             ok: true,
@@ -648,29 +681,56 @@ export function BackupService(): Hono {
         });
     }));
 
-    // 9. POST /backup/github-test —— 测试 GitHub 仓库连接与权限（自动检测是否为私有仓库）
+    // 9. POST /backup/github-test —— 测试 GitHub 仓库连接（优先使用前端输入框传入的实时参数，免保存直接测试！）
     app.post("/github-test", adminOnly(async (c: AppContext) => {
         const env = c.get("env");
-        const cacheManager = c.get("cache");
-        const cfg = await getGitHubBackupConfig(env, cacheManager);
+        const serverConfig = c.get("serverConfig");
+        const body = (await c.req.json().catch(() => ({}))) as {
+            owner?: string;
+            repo?: string;
+            token?: string;
+        };
 
-        if (!cfg.configured) {
-            return c.json({ ok: false, error: "GitHub 备份尚未配置完成" }, 400);
+        const stored = await getGitHubBackupConfig(env, serverConfig);
+        const owner = (body.owner?.trim() || stored.owner).trim();
+        const repo = (body.repo?.trim() || stored.repo).trim();
+        const token = (body.token?.trim() || stored.token).trim();
+
+        if (!owner || !repo || !token) {
+            return c.json({ ok: false, error: "请先在上方输入完整的 GitHub 用户名 (Owner)、仓库名 (Repo) 以及访问令牌 (Token)" }, 400);
         }
 
         try {
-            const res = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}`, {
+            const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
                 method: "GET",
                 headers: {
-                    Authorization: `Bearer ${cfg.token}`,
+                    Authorization: `Bearer ${token}`,
                     Accept: "application/vnd.github+json",
                     "User-Agent": "Rin-Blog-Backup/1.0",
                 },
             });
 
             if (!res.ok) {
-                const text = await res.text();
-                return c.json({ ok: false, error: `GitHub API 返回错误 (${res.status}): ${text}` }, 400);
+                const text = await res.text().catch(() => "");
+                let detail = text;
+                try {
+                    const parsed = JSON.parse(text);
+                    if (parsed.message) detail = parsed.message;
+                } catch {}
+
+                if (res.status === 404) {
+                    return c.json({
+                        ok: false,
+                        error: `验证失败 (404 Not Found): 找不到仓库「${owner}/${repo}」。请确认仓库已在 GitHub 创建好，且 Token 拥有访问该私有仓库的权限 (Classic Token 勾选 repo，Fine-grained Token 授权该仓库)。`,
+                    }, 400);
+                }
+                if (res.status === 401) {
+                    return c.json({
+                        ok: false,
+                        error: `验证失败 (401 Unauthorized): 访问令牌 (Token) 无效或已过期，请重新生成。`,
+                    }, 400);
+                }
+                return c.json({ ok: false, error: `GitHub 校验失败 (${res.status}): ${detail}` }, 400);
             }
 
             const repoData: any = await res.json();
@@ -678,10 +738,12 @@ export function BackupService(): Hono {
                 ok: true,
                 isPrivate: repoData.private === true,
                 defaultBranch: repoData.default_branch,
-                message: repoData.private ? "连接成功！目标为私有仓库，符合安全标准。" : "连接成功！⚠️ 警告：当前目标仓库为公开仓库（Public），为保护隐私请强烈建议在 GitHub 设为 Private！",
+                message: repoData.private
+                    ? `连接成功！已成功连接到私有仓库「${owner}/${repo}」，符合安全标准。现在可以放心点击右下角【保存配置】！`
+                    : `连接成功！⚠️ 警告：检测到仓库「${owner}/${repo}」为公开仓库（Public）！备份包含全站私密数据，强烈建议在 GitHub 仓库设置中改为 Private（私有）后再使用！`,
             });
         } catch (e: any) {
-            return c.json({ ok: false, error: `请求 GitHub 失败: ${e.message}` }, 500);
+            return c.json({ ok: false, error: `网络请求 GitHub 失败: ${e.message}` }, 500);
         }
     }));
 
@@ -689,9 +751,9 @@ export function BackupService(): Hono {
     app.post("/export-to-github", adminOnly(async (c: AppContext) => {
         const db = c.get("db");
         const env = c.get("env");
-        const cacheManager = c.get("cache");
+        const serverConfig = c.get("serverConfig");
 
-        const cfg = await getGitHubBackupConfig(env, cacheManager);
+        const cfg = await getGitHubBackupConfig(env, serverConfig);
         if (!cfg.configured) {
             return c.json({ ok: false, error: "请先配置并保存 GitHub 备份仓库信息" }, 400);
         }
@@ -751,8 +813,8 @@ export function BackupService(): Hono {
     // 11. GET /backup/github-list —— 从 GitHub 仓库直接列出所有历史备份快照
     app.get("/github-list", adminOnly(async (c: AppContext) => {
         const env = c.get("env");
-        const cacheManager = c.get("cache");
-        const cfg = await getGitHubBackupConfig(env, cacheManager);
+        const serverConfig = c.get("serverConfig");
+        const cfg = await getGitHubBackupConfig(env, serverConfig);
 
         if (!cfg.configured) {
             return c.json({ ok: false, error: "未配置 GitHub 备份仓库" }, 400);
@@ -813,8 +875,8 @@ export function BackupService(): Hono {
     // 12. POST /backup/inspect-github-backup —— 下载并核对预览指定 GitHub 备份
     app.post("/inspect-github-backup", adminOnly(async (c: AppContext) => {
         const env = c.get("env");
-        const cacheManager = c.get("cache");
-        const cfg = await getGitHubBackupConfig(env, cacheManager);
+        const serverConfig = c.get("serverConfig");
+        const cfg = await getGitHubBackupConfig(env, serverConfig);
 
         if (!cfg.configured) {
             return c.json({ ok: false, error: "未配置 GitHub 备份仓库" }, 400);
@@ -862,7 +924,8 @@ export function BackupService(): Hono {
         const db = c.get("db");
         const env = c.get("env");
         const cacheManager = c.get("cache");
-        const cfg = await getGitHubBackupConfig(env, cacheManager);
+        const serverConfig = c.get("serverConfig");
+        const cfg = await getGitHubBackupConfig(env, serverConfig);
 
         if (!cfg.configured) {
             return c.json({ ok: false, error: "未配置 GitHub 备份仓库" }, 400);
