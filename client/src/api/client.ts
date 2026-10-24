@@ -272,7 +272,6 @@ class HttpClient {
       ...options?.headers,
     };
 
-    // Add auth token if available
     const token = getAuthToken();
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
@@ -290,7 +289,6 @@ class HttpClient {
         credentials: "include",
       });
 
-      // Handle 204 No Content
       if (response.status === 204) {
         return { data: undefined as T };
       }
@@ -818,9 +816,13 @@ class BackupAPI {
     return this.http.post<{ ok: boolean; message: string }>("/api/backup/github-config", body);
   }
 
-  // 9. 测试 GitHub 仓库连接与私有属性
-  testGitHubConnection(): Promise<ApiResponse<{ ok: boolean; isPrivate: boolean; message: string; defaultBranch?: string }>> {
-    return this.http.post<{ ok: boolean; isPrivate: boolean; message: string; defaultBranch?: string }>("/api/backup/github-test", {});
+  // 9. 测试 GitHub 仓库连接（支持免保存直接测试当前输入的内容）
+  testGitHubConnection(body?: {
+    owner?: string;
+    repo?: string;
+    token?: string;
+  }): Promise<ApiResponse<{ ok: boolean; isPrivate: boolean; message: string; defaultBranch?: string }>> {
+    return this.http.post<{ ok: boolean; isPrivate: boolean; message: string; defaultBranch?: string }>("/api/backup/github-test", body || {});
   }
 
   // 10. 备份到 GitHub 仓库
