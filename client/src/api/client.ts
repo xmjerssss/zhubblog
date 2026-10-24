@@ -145,6 +145,12 @@ export interface BackupPreviewResponse {
     name: string;
     folder: string;
   };
+  targetGitHub: {
+    configured: boolean;
+    repo: string;
+    branch: string;
+    path: string;
+  };
 }
 
 export interface BackupExportToStorageResponse {
@@ -181,6 +187,34 @@ export interface BackupRestoreResponse {
   ok: boolean;
   message: string;
   counts: any;
+}
+
+// GitHub 备份配置与列表类型
+export interface GitHubBackupConfigResponse {
+  ok: boolean;
+  configured: boolean;
+  owner: string;
+  repo: string;
+  branch: string;
+  path: string;
+  hasToken: boolean;
+}
+
+export interface GitHubBackupItem {
+  filename: string;
+  path: string;
+  downloadUrl: string;
+  size: number;
+  sha: string;
+  createdAt: string;
+}
+
+export interface GitHubBackupListResponse {
+  ok: boolean;
+  target: string;
+  branch: string;
+  items: GitHubBackupItem[];
+  error?: string;
 }
 
 // Re-export for external use
@@ -690,7 +724,7 @@ class StorageAdminAPI {
 }
 
 /**
- * Backup API methods
+ * Backup API methods (全量备份与容灾恢复)
  */
 class BackupAPI {
   constructor(private http: HttpClient) {}
@@ -737,22 +771,22 @@ class BackupAPI {
     }
   }
 
-  // 3. 归档到云端
+  // 3. 归档到存储桶
   exportToStorage(): Promise<ApiResponse<BackupExportToStorageResponse>> {
     return this.http.post<BackupExportToStorageResponse>("/api/backup/export-to-storage", {});
   }
 
-  // 4. 获取云端备份列表
+  // 4. 获取存储桶备份列表
   listStorageBackups(): Promise<ApiResponse<BackupStorageListResponse>> {
     return this.http.get<BackupStorageListResponse>("/api/backup/storage-list");
   }
 
-  // 4.1 检查云端指定路径的备份文件
+  // 4.1 检查存储桶指定路径的备份文件
   inspectStorageBackup(key: string): Promise<ApiResponse<BackupInspectResponse>> {
     return this.http.post<BackupInspectResponse>("/api/backup/inspect-storage-backup", { key });
   }
 
-  // 5. 从云端恢复
+  // 5. 从存储桶恢复
   restoreFromStorage(key: string): Promise<ApiResponse<BackupRestoreResponse>> {
     return this.http.post<BackupRestoreResponse>("/api/backup/restore-from-storage", { key });
   }
@@ -762,6 +796,57 @@ class BackupAPI {
     const formData = new FormData();
     formData.append("file", file);
     return this.http.post<BackupRestoreResponse>("/api/backup/import", formData);
+  }
+
+  // =================== GitHub 专属备份能力 ===================
+
+  // 7. 获取 GitHub 备份配置
+  getGitHubConfig(): Promise<ApiResponse<GitHubBackupConfigResponse>> {
+    return this.http.get<GitHubBackupConfigResponse>("/api/backup/github-config");
+  }
+
+  // 8. 保存 GitHub 备份配置
+  saveGitHubConfig(body: {
+    owner: string;
+    repo: string;
+    branch?: string;
+    path?: string;
+    token?: string;
+  }): Promise<ApiResponse<{ ok: boolean; message: string }>> {
+    return this.http.post<{ ok: boolean; message: string }>("/api/backup/github-config", body);
+  }
+
+  // 9. 测试 GitHub 仓库连接与私有属性
+  testGitHubConnection(): Promise<ApiResponse<{ ok: boolean; isPrivate: boolean; message: string; defaultBranch?: string }>> {
+    return this.http.post<{ ok: boolean; isPrivate: boolean; message: string; defaultBranch?: string }>("/api/backup/github-test", {});
+  }
+
+  // 10. 备份到 GitHub 仓库
+  exportToGitHub(): Promise<ApiResponse<{
+    ok: boolean;
+    filename: string;
+    path: string;
+    target: string;
+    commitSha: string;
+    htmlUrl: string;
+    metadata: any;
+  }>> {
+    return this.http.post<any>("/api/backup/export-to-github", {});
+  }
+
+  // 11. 列出 GitHub 仓库备份列表
+  listGitHubBackups(): Promise<ApiResponse<GitHubBackupListResponse>> {
+    return this.http.get<GitHubBackupListResponse>("/api/backup/github-list");
+  }
+
+  // 12. 预览指定的 GitHub 备份
+  inspectGitHubBackup(path: string): Promise<ApiResponse<BackupInspectResponse>> {
+    return this.http.post<BackupInspectResponse>("/api/backup/inspect-github-backup", { path });
+  }
+
+  // 13. 从 GitHub 仓库恢复
+  restoreFromGitHub(path: string): Promise<ApiResponse<BackupRestoreResponse>> {
+    return this.http.post<BackupRestoreResponse>("/api/backup/restore-from-github", { path });
   }
 }
 
