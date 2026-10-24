@@ -177,7 +177,8 @@ export interface BackupStorageListResponse {
 
 export interface BackupInspectResponse {
   ok: boolean;
-  key: string;
+  key?: string;
+  path?: string;
   filename: string;
   exportedAt: string;
   metadata: any;
@@ -185,8 +186,9 @@ export interface BackupInspectResponse {
 
 export interface BackupRestoreResponse {
   ok: boolean;
-  message: string;
-  counts: any;
+  message?: string;
+  error?: string;
+  counts?: any;
 }
 
 // GitHub 备份配置与列表类型
