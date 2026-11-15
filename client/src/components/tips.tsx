@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Button } from "./button";
+import { Button } from "@rin/ui";
 
 export function Tips({ value, type = 'tips' }: { value: string, type?: 'note' | 'tips' | 'warn' | 'error' | 'info' | 'important' }) {
     const { t } = useTranslation();

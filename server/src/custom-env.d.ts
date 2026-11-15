@@ -8,6 +8,8 @@ declare global {
     FRONTEND_URL?: string;
     /** 加密自定义存储密钥用的主密钥（可选）。未设置时使用 JWT_SECRET 派生 */
     STORAGE_SECRET?: string;
+    /** 设为 1/true 时输出缓存、RSS 等调试日志（默认关闭） */
+    LOG_DEBUG?: string;
   }
 }
 

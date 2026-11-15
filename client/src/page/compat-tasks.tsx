@@ -4,7 +4,7 @@ import { Helmet } from "react-helmet";
 import { useTranslation } from "react-i18next";
 import ReactLoading from "react-loading";
 import { client } from "../app/runtime";
-import { Button } from "../components/button";
+import { Button } from "@rin/ui";
 import { useAlert } from "../components/dialog";
 import { useSiteConfig } from "../hooks/useSiteConfig";
 import { enrichMarkdownImageMetadata } from "../utils/image-upload";

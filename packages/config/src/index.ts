@@ -23,6 +23,7 @@ export const CLIENT_CONFIG_DEFAULTS = new Map(
 
 export const SERVER_CONFIG_DEFAULTS = new Map(
   Object.entries({
+    "comment.require_approval": false,
     friend_apply_auto_accept: false,
     friend_crontab: true,
     friend_ua: "Rin-Check/0.1.0",

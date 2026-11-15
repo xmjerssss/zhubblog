@@ -49,6 +49,7 @@ Rin 部署需要配置两类环境变量：**Variables（明文变量）**和**S
 | `WEBHOOK_URL` | 否 | 评论通知 Webhook | - | - |
 | `RSS_TITLE` | 否 | RSS 标题 | - | - |
 | `RSS_DESCRIPTION` | 否 | RSS 描述 | - | - |
+| `LOG_DEBUG` | 否 | 输出缓存 / RSS / sitemap 调试日志（排障用） | 关闭 | - |
 
 :::tip 新用户推荐
 建议将 `CACHE_STORAGE_MODE` 设为 `database`，无需额外配置 S3 缓存即可使用，降低部署复杂度。
@@ -68,10 +69,17 @@ Rin 部署需要配置两类环境变量：**Variables（明文变量）**和**S
 | `RIN_GITHUB_CLIENT_SECRET` | GitHub OAuth 客户端密钥 | GitHub OAuth App 设置 |
 | `ADMIN_USERNAME` | 账号密码登录用户名 | 自行设定 |
 | `ADMIN_PASSWORD` | 账号密码登录密码 | 自行设定 |
-| `JWT_SECRET` | JWT 签名密钥（任意随机字符串） | 自行生成 |
+| `JWT_SECRET` | JWT 签名密钥（**>=32 位随机字符串**） | `openssl rand -hex 32` |
 
 :::warning 认证要求
 必须配置 **GitHub OAuth** 或 **账号密码** 其中一种登录方式，否则无法登录后台。
+:::
+
+:::danger 安全提示
+- `JWT_SECRET` 绝不能沿用示例值（`your-jwt-secret-key` 之类）。它一旦泄露，任何人都能伪造登录令牌。
+- `ADMIN_PASSWORD` 不要使用 `admin123` 等弱口令，服务端启动时会对示例值 / 弱口令打印警告。
+- 建议显式配置 `FRONTEND_URL`（站点公开地址），OAuth 回跳、sitemap 与 RSS 都会以它为准。
+- 登录态保存在 HttpOnly cookie 中，旧的 localStorage token 会在页面加载时自动清理。
 :::
 
 ### S3 存储凭证

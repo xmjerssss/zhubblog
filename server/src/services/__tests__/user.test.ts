@@ -70,12 +70,25 @@ describe('UserService', () => {
             expect(location).toContain('state=');
         });
 
-        it('should require referer header', async () => {
-            const res = await app.request('/github', { method: 'GET' }, env);
-            
-            expect(res.status).toBe(400);
-            const data = await res.json() as { error: { message: string } };
-            expect(data.error.message).toBe('Referer header is required');
+        it('should fall back to the request origin when referer is missing', async () => {
+            const res = await app.request('http://blog.example.com/github', { method: 'GET' }, env);
+
+            expect(res.status).toBe(302);
+            const setCookie = res.headers.get('Set-Cookie') || '';
+            expect(setCookie).toContain('redirect_to=');
+            expect(decodeURIComponent(setCookie)).toContain('http://blog.example.com');
+        });
+
+        it('should ignore untrusted referer origins', async () => {
+            const res = await app.request('http://blog.example.com/github', {
+                method: 'GET',
+                headers: { 'Referer': 'https://evil.example.net/phish' },
+            }, env);
+
+            expect(res.status).toBe(302);
+            const setCookie = decodeURIComponent(res.headers.get('Set-Cookie') || '');
+            expect(setCookie).not.toContain('evil.example.net');
+            expect(setCookie).toContain('http://blog.example.com');
         });
 
         it('should return 400 if OAuth not configured', async () => {
@@ -165,8 +178,38 @@ describe('UserService', () => {
                 }, env);
                 
                 expect(res.status).toBe(302);
-                const location = res.headers.get('Location');
+                const location = res.headers.get('Location') || '';
                 expect(location).toContain('/callback');
+                // token 只能通过 HttpOnly cookie 下发，不能出现在 URL 里
+                expect(location).not.toContain('token=');
+            } finally {
+                global.fetch = originalFetch;
+            }
+        });
+
+        it('should not redirect to an untrusted origin', async () => {
+            const originalFetch = global.fetch;
+            global.fetch = async () => {
+                return new Response(JSON.stringify({
+                    id: 'gh_123',
+                    login: 'user1',
+                    name: 'User One',
+                    avatar_url: 'https://github.com/avatar.png'
+                }), { status: 200 });
+            };
+
+            try {
+                const res = await app.request('http://blog.example.com/github/callback?code=valid_code&state=mock_state', {
+                    method: 'GET',
+                    headers: {
+                        'Cookie': 'state=mock_state; redirect_to=https://evil.example.net/callback'
+                    }
+                }, env);
+
+                expect(res.status).toBe(302);
+                const location = res.headers.get('Location') || '';
+                expect(location).not.toContain('evil.example.net');
+                expect(location).toContain('blog.example.com');
             } finally {
                 global.fetch = originalFetch;
             }

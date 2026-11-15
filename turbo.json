@@ -23,12 +23,6 @@
     "db:mig": {
       "cache": false
     },
-    "format:check": {
-      "dependsOn": ["^format:check"]
-    },
-    "format:write": {
-      "dependsOn": ["^format:write"]
-    },
     "cf:deploy": {
       "cache": false
     },

@@ -10,10 +10,11 @@ describe('CommentService', () => {
     let sqlite: Database;
     let env: Env;
     let app: Hono<{ Bindings: Env; Variables: Variables }>;
+    let ctx: Awaited<ReturnType<typeof setupTestApp>>;
     const originalFetch = globalThis.fetch;
 
     beforeEach(async () => {
-        const ctx = await setupTestApp(CommentService);
+        ctx = await setupTestApp(CommentService);
         db = ctx.db;
         sqlite = ctx.sqlite;
         env = ctx.env;
@@ -84,9 +85,10 @@ describe('CommentService', () => {
             const data = await res.json() as any;
             expect(data.length).toBeGreaterThan(0);
             
-            // Should not include feedId and userId (excluded in query)
+            // Should not include feedId, userId（查询时排除）与游客邮箱（隐私）
             expect(data[0]).not.toHaveProperty('feedId');
             expect(data[0]).not.toHaveProperty('userId');
+            expect(data[0]).not.toHaveProperty('guestEmail');
             
             // Should include user info
             expect(data[0].user).toHaveProperty('id');
@@ -145,6 +147,53 @@ describe('CommentService', () => {
             expect(row.guest_name).toBe('Visitor');
             expect(row.guest_email).toBe('visitor@example.com');
             expect(row.guest_website).toBe('https://example.com');
+        });
+
+        it('should reject overly long comment content', async () => {
+            const res = await app.request('/1', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: 'x'.repeat(5001), guestName: 'Guest' }),
+            }, env);
+
+            expect(res.status).toBe(400);
+            const text = await res.text();
+            expect(text).toContain('too long');
+        });
+
+        it('should reject non-http(s) guest website', async () => {
+            const res = await app.request('/1', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    content: 'hello',
+                    guestName: 'Guest',
+                    guestWebsite: 'javascript:alert(1)',
+                }),
+            }, env);
+
+            expect(res.status).toBe(400);
+            const text = await res.text();
+            expect(text).toContain('http(s)');
+        });
+
+        it('should not expose guest email in the comment list', async () => {
+            await app.request('/1', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    content: 'private email',
+                    guestName: 'EmailGuest',
+                    guestEmail: 'secret@example.com',
+                }),
+            }, env);
+
+            const res = await app.request('/1', { method: 'GET' }, env);
+            const data = await res.json() as any[];
+            const guest = data.find((comment) => comment.guestName === 'EmailGuest');
+
+            expect(guest).toBeDefined();
+            expect(guest).not.toHaveProperty('guestEmail');
         });
 
         it('should reject guest comment without guestName', async () => {
@@ -291,6 +340,90 @@ describe('CommentService', () => {
             }, env);
 
             expect(res.status).toBe(404);
+        });
+    });
+
+    describe('Comment approval', () => {
+        async function enableApproval() {
+            await ctx.serverConfig.set('comment.require_approval', true);
+        }
+
+        it('holds new guest comments for review when approval is required', async () => {
+            await enableApproval();
+
+            const res = await app.request('/1', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: 'please review me', guestName: 'Visitor' }),
+            }, env);
+
+            expect(res.status).toBe(200);
+            expect(await res.text()).toBe('Pending approval');
+
+            const row = sqlite.prepare(
+                `SELECT approved FROM comments WHERE content = 'please review me'`
+            ).get() as any;
+            expect(row.approved).toBe(0);
+        });
+
+        it('hides unapproved comments from visitors but shows them to admins', async () => {
+            await enableApproval();
+            sqlite.exec(`
+                INSERT INTO comments (id, feed_id, user_id, content, approved) VALUES
+                    (10, 1, 1, 'pending one', 0)
+            `);
+
+            const visitor = await app.request('/1', { method: 'GET' }, env);
+            const visitorList = await visitor.json() as any[];
+            expect(visitorList.some((item) => item.content === 'pending one')).toBe(false);
+
+            const admin = await app.request('/1', {
+                method: 'GET',
+                headers: { Authorization: 'Bearer mock_token_3' },
+            }, env);
+            const adminList = await admin.json() as any[];
+            expect(adminList.some((item) => item.content === 'pending one')).toBe(true);
+        });
+
+        it('lets an admin list and approve pending comments', async () => {
+            sqlite.exec(`
+                INSERT INTO comments (id, feed_id, user_id, content, approved) VALUES
+                    (11, 1, 1, 'needs approval', 0)
+            `);
+
+            const pending = await app.request('/pending', {
+                method: 'GET',
+                headers: { Authorization: 'Bearer mock_token_3' },
+            }, env);
+            expect(pending.status).toBe(200);
+            const pendingList = await pending.json() as any[];
+            expect(pendingList.map((item) => item.content)).toContain('needs approval');
+            expect(pendingList[0].feed?.title).toBe('Feed 1');
+
+            const approve = await app.request('/11/approve', {
+                method: 'PATCH',
+                headers: { Authorization: 'Bearer mock_token_3' },
+            }, env);
+            expect(approve.status).toBe(200);
+
+            const row = sqlite.prepare(`SELECT approved FROM comments WHERE id = 11`).get() as any;
+            expect(row.approved).toBe(1);
+        });
+
+        it('rejects approval attempts from non-admins', async () => {
+            sqlite.exec(`
+                INSERT INTO comments (id, feed_id, user_id, content, approved) VALUES
+                    (12, 1, 1, 'pending again', 0)
+            `);
+
+            const res = await app.request('/12/approve', {
+                method: 'PATCH',
+                headers: { Authorization: 'Bearer mock_token_1' },
+            }, env);
+
+            expect(res.status).toBeGreaterThanOrEqual(400);
+            const row = sqlite.prepare(`SELECT approved FROM comments WHERE id = 12`).get() as any;
+            expect(row.approved).toBe(0);
         });
     });
 });

@@ -5,6 +5,7 @@ import { drizzle } from "drizzle-orm/d1";
 import type { AppContext, Variables, JWTUtils, OAuth2Utils } from "./hono-types";
 import { eq } from "drizzle-orm";
 import { profileAsync } from "./server-timing";
+import { warnInsecureDefaults } from "./config-guard";
 
 // Lazy initialization container
 class LazyInitContainer {
@@ -42,6 +43,7 @@ export const initContainerMiddleware = createMiddleware<{
     Variables: Variables;
 }>(async (c, next) => {
     await profileAsync(c, "init_container", async () => {
+        warnInsecureDefaults(c.env);
         const container = new LazyInitContainer(c.env);
 
         const db = await container.get('db', async () => profileAsync(c, "init_db", async () => {
@@ -49,24 +51,20 @@ export const initContainerMiddleware = createMiddleware<{
             return drizzle(c.env.DB, { schema });
         }));
 
+        const clientConfig = await container.get('clientConfig', async () => profileAsync(c, "init_client_config", async () => {
+            const { CacheImpl } = await import('../utils/cache');
+            return new CacheImpl(db, c.env, "client.config");
+        }));
+
         const cache = await container.get('cache', async () => profileAsync(c, "init_cache", async () => {
             const { CacheImpl } = await import('../utils/cache');
-            const clientConfig = await container.get('clientConfig', async () => profileAsync(c, "init_client_config", async () => {
-                const { CacheImpl } = await import('../utils/cache');
-                return new CacheImpl(db, c.env, "client.config");
-            }));
             return new CacheImpl(db, c.env, "cache", undefined, clientConfig);
         }));
 
         const serverConfig = await container.get('serverConfig', async () => profileAsync(c, "init_server_config", async () => {
-                const { CacheImpl } = await import('../utils/cache');
-                return new CacheImpl(db, c.env, "server.config", "database");
-            }));
-
-        const clientConfig = await container.get('clientConfig', async () => profileAsync(c, "init_client_config", async () => {
-                const { CacheImpl } = await import('../utils/cache');
-                return new CacheImpl(db, c.env, "client.config");
-            }));
+            const { CacheImpl } = await import('../utils/cache');
+            return new CacheImpl(db, c.env, "server.config", "database");
+        }));
 
         const jwt = await container.get('jwt', async () => profileAsync(c, "init_jwt", async () => {
             const { default: createJWT } = await import('../utils/jwt');
@@ -140,13 +138,22 @@ export const authMiddleware = createMiddleware<{
     await next();
 });
 
+// HTTPS 下才加 Secure，否则本地 http 开发环境无法写入 cookie。
+function isSecureRequest(c: AppContext): boolean {
+    try {
+        return new URL(c.req.url).protocol === 'https:';
+    } catch {
+        return false;
+    }
+}
+
 // Helper to set JWT cookie
 export function setJWTCookie(c: AppContext, token: string) {
     setCookie(c, 'token', token, {
         expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7),
         path: '/',
         httpOnly: true,
-        secure: true,
+        secure: isSecureRequest(c),
         sameSite: 'Lax',
     });
 }
@@ -157,7 +164,7 @@ export function clearJWTCookie(c: AppContext) {
         expires: new Date(0),
         path: '/',
         httpOnly: true,
-        secure: true,
+        secure: isSecureRequest(c),
         sameSite: 'Lax',
     });
 }

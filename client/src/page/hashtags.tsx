@@ -3,7 +3,7 @@ import { Helmet } from 'react-helmet';
 import { useTranslation } from "react-i18next";
 import { Link } from "wouter";
 import { HashTag } from "../components/hashtag";
-import { Waiting } from "../components/loading";
+import { Waiting } from "@rin/ui";
 import { client } from "../app/runtime";
 import { useSiteConfig } from "../hooks/useSiteConfig";
 import { siteName } from "../utils/constants";

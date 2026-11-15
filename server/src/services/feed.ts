@@ -21,6 +21,9 @@ import {
 import { HyperLogLog } from "../utils/hyperloglog";
 import { extractImageWithMetadata } from "../utils/image";
 import { stripMarkdown } from "../utils/markdown";
+import { clientIp } from "../utils/request";
+import { runInBackground } from "../utils/background";
+import { hashVisitorIp, isBotRequest } from "../utils/visitor";
 import { syncFeedAISummaryQueueState } from "./feed-ai-summary";
 import { bindTagToPost } from "./tag";
 import { clearFeedCache, clearFeedCollectionCaches } from "./clear-feed-cache";
@@ -87,7 +90,10 @@ export function FeedService(): Hono<{
 
         const page_num = parsePositiveInteger(page, 1) - 1;
         const limit_num = parsePositiveInteger(limit, 20, 50);
-        const cacheKey = `feeds_${type}_${page_num}_${limit_num}`;
+        // 返回字段与访问者角色有关（管理员能看到 draft/listed），
+        // 因此缓存 key 必须带上角色，避免管理员与游客互相污染缓存。
+        const viewer = admin ? 'admin' : 'public';
+        const cacheKey = `feeds_${type}_${page_num}_${limit_num}_${viewer}`;
         const cached = await profileAsync(c, 'feed_list_cache_get', () => cache.get(cacheKey));
 
         if (cached) {
@@ -256,22 +262,26 @@ export function FeedService(): Hono<{
         const { hashtags, ...other } = feed;
         const hashtags_flatten = hashtags.map((f: any) => f.hashtag);
 
-        // update visits using HyperLogLog for efficient UV estimation
+        // 浏览量统计：管理员本人浏览、常见爬虫/预览机器人不计入统计，
+        // 否则后台调试和搜索引擎抓取会持续放大 PV/UV。
         const enableVisit = await profileAsync(c, 'feed_detail_counter_flag', () => clientConfig.getOrDefault('counter.enabled', true));
-        let pv = 0;
-        let uv = 0;
+        const shouldCountVisit = enableVisit
+            && !admin
+            && !isBotRequest(c.req.header('user-agent'));
 
-        if (enableVisit) {
-            const ip = c.req.header('cf-connecting-ip') || c.req.header('x-real-ip') || "UNK";
-            const visitorKey = `${ip}`;
-
-            // Get or create visit stats for this feed
-            let stats = await profileAsync(c, 'feed_detail_stats_lookup', () => db.query.visitStats.findFirst({
+        const stats = enableVisit
+            ? await profileAsync(c, 'feed_detail_stats_lookup', () => db.query.visitStats.findFirst({
                 where: eq(visitStats.feedId, feed.id)
-            }));
+            }))
+            : null;
+
+        let pv = stats?.pv ?? 0;
+        let uv = stats ? Math.round(new HyperLogLog(stats.hllData).count()) : 0;
+
+        if (shouldCountVisit) {
+            const ip = clientIp(c);
 
             if (!stats) {
-                // Create new stats record
                 await profileAsync(c, 'feed_detail_stats_insert', () => db.insert(visitStats).values({
                     feedId: feed.id,
                     pv: 1,
@@ -282,7 +292,7 @@ export function FeedService(): Hono<{
             } else {
                 // Update existing stats
                 const hll = new HyperLogLog(stats.hllData);
-                hll.add(visitorKey);
+                hll.add(ip);
                 const newHllData = hll.serialize();
                 const newPv = stats.pv + 1;
 
@@ -298,8 +308,12 @@ export function FeedService(): Hono<{
                 uv = Math.round(hll.count());
             }
 
-            // Keep recording to visits table for backup/history
-            await profileAsync(c, 'feed_detail_visit_insert', () => db.insert(visits).values({ feedId: feed.id, ip: ip }));
+            // 访问明细用于历史统计；IP 只记录加盐哈希，不落明文。
+            const visitorHash = await hashVisitorIp(ip, c.env.JWT_SECRET);
+            await runInBackground(c, () => profileAsync(c, 'feed_detail_visit_insert', () => db.insert(visits).values({
+                feedId: feed.id,
+                ip: visitorHash
+            })));
         }
 
         return c.json({ ...other, hashtags: hashtags_flatten, pv, uv });

@@ -5,6 +5,7 @@
   "webhook",
   "rss",
   "migration",
+  "disaster-recovery",
   "changelog",
   "testing",
   "contribution",

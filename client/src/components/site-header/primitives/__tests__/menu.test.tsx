@@ -47,7 +47,7 @@ mock.module("../../../app/runtime", () => ({
 }));
 
 mock.module("../../../utils/auth", () => ({
-  removeAuthToken: mock(),
+  clearLegacyAuthToken: mock(),
 }));
 
 mock.module("../nav-bar", () => ({

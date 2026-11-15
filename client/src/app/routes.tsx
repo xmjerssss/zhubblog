@@ -1,36 +1,50 @@
-import type { ReactNode } from "react";
-import { useContext } from "react";
+import type { ComponentType, ReactNode } from "react";
+import { Suspense, lazy, useContext } from "react";
 import type { DefaultParams, PathPattern } from "wouter";
 import { Route, Switch } from "wouter";
 import { AdminLayout } from "../components/admin-layout";
 import Footer from "../components/footer";
 import { Header } from "../components/header";
-import { Padding } from "../components/padding";
+import { Waiting } from "@rin/ui";
+import { Padding } from "@rin/ui";
 import { getHeaderLayoutDefinition } from "../components/site-header/layout-registry";
 import { Tips, TipsPage } from "../components/tips";
 import useTableOfContents from "../hooks/useTableOfContents";
 import { useSiteConfig } from "../hooks/useSiteConfig";
 import { CallbackPage } from "../page/callback";
-import { CompatTasksPage } from "../page/compat-tasks";
 import { ErrorPage } from "../page/error";
 import { FeedPage, TOCHeader } from "../page/feed";
 import { FeedsPage } from "../page/feeds";
-import { FriendsPage } from "../page/friends";
-import { HealthPage } from "../page/health";
-import { HashtagPage } from "../page/hashtag";
-import { HashtagsPage } from "../page/hashtags";
-import { LoginPage } from "../page/login";
-import { MomentsPage } from "../page/moments";
-import { ProfilePage } from "../page/profile";
-import { QueueStatusPage } from "../page/queue-status";
-import { SearchPage } from "../page/search";
-import { Settings } from "../page/settings";
-import { StoragePage } from "../page/storage";
-import { TimelinePage } from "../page/timeline";
-import { WritingPage } from "../page/writing";
 import { ProfileContext } from "../state/profile";
 import { tryInt } from "../utils/int";
 import { useTranslation } from "react-i18next";
+
+// 后台与低频页面按需加载：设置页、写作页（Monaco）、存储页等体积较大，
+// 不必进入普通访客的首屏包。
+function lazyPage<T extends Record<string, unknown>>(
+  loader: () => Promise<T>,
+  name: keyof T,
+) {
+  return lazy(async () => {
+    const module = await loader();
+    return { default: module[name] as ComponentType<any> };
+  });
+}
+
+const CompatTasksPage = lazyPage(() => import("../page/compat-tasks"), "CompatTasksPage");
+const FriendsPage = lazyPage(() => import("../page/friends"), "FriendsPage");
+const HealthPage = lazyPage(() => import("../page/health"), "HealthPage");
+const HashtagPage = lazyPage(() => import("../page/hashtag"), "HashtagPage");
+const HashtagsPage = lazyPage(() => import("../page/hashtags"), "HashtagsPage");
+const LoginPage = lazyPage(() => import("../page/login"), "LoginPage");
+const MomentsPage = lazyPage(() => import("../page/moments"), "MomentsPage");
+const ProfilePage = lazyPage(() => import("../page/profile"), "ProfilePage");
+const QueueStatusPage = lazyPage(() => import("../page/queue-status"), "QueueStatusPage");
+const SearchPage = lazyPage(() => import("../page/search"), "SearchPage");
+const Settings = lazyPage(() => import("../page/settings"), "Settings");
+const StoragePage = lazyPage(() => import("../page/storage"), "StoragePage");
+const TimelinePage = lazyPage(() => import("../page/timeline"), "TimelinePage");
+const WritingPage = lazyPage(() => import("../page/writing"), "WritingPage");
 
 export function AppRoutes() {
   const { t } = useTranslation();
@@ -166,7 +180,11 @@ function AppRoute({
 
         return layoutDefinition.renderRouteShell({
           header: <Header>{headerComponent}</Header>,
-          content: <Padding className={paddingClassName}>{resolvedContent}</Padding>,
+          content: (
+            <Padding className={paddingClassName}>
+              <Suspense fallback={<Waiting />}>{resolvedContent}</Suspense>
+            </Padding>
+          ),
           footer: <Footer />,
           paddingClassName,
         });
@@ -197,7 +215,9 @@ function AdminRoute({
     <Route path={path}>
       {(params) => (
         <AdminLayout title={title} description={description}>
-          {typeof content === "function" ? content(params) : content}
+          <Suspense fallback={<Waiting />}>
+            {typeof content === "function" ? content(params) : content}
+          </Suspense>
         </AdminLayout>
       )}
     </Route>

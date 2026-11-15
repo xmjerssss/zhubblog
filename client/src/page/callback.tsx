@@ -1,18 +1,13 @@
 import {useEffect} from "react";
 import {useLocation} from "wouter";
-import { setAuthToken } from "../utils/auth";
 
 export function CallbackPage() {
     const [, setLocation] = useLocation();
     useEffect(() => {
-        // Try to get token from URL query parameter (for cross-domain OAuth)
-        const urlParams = new URLSearchParams(window.location.search);
-        const token = urlParams.get('token');
-        if (token) {
-            setAuthToken(token);
-        }
-        setLocation("/");
-    }, []);
+        // 登录态由服务端下发的 HttpOnly cookie 承载，不再从 URL 读取 token
+        // （URL 上的 token 会进入浏览器历史、Referer 和统计脚本，且可被用于会话固定）。
+        setLocation("/", { replace: true });
+    }, [setLocation]);
     return (<>
         <div className="w-screen h-screen flex justify-center items-center">
             <div className="text-center text-black p-4 text-xl font-bold">

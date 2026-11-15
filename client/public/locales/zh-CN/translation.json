@@ -104,7 +104,8 @@
     "guest_name_required": "昵称不能为空",
     "guest_name_placeholder": "昵称（必填）",
     "guest_email_placeholder": "邮箱（可选）",
-    "guest_website_placeholder": "网站（可选）"
+    "guest_website_placeholder": "网站（可选）",
+    "pending": "评论已提交，等待站长审核后显示"
   },
   "comparison": "对比",
   "confirm": "确认",
@@ -300,6 +301,19 @@
       "enable": {
         "desc": "开启/关闭文章底部评论入口与评论区",
         "title": "启用评论"
+      },
+      "approval": {
+        "title": "评论需要审核",
+        "desc": "开启后新评论先进入待审核列表，通过后才对所有人可见（站长自己的评论直接通过）"
+      },
+      "moderation": {
+        "title": "待审核评论",
+        "refresh": "刷新",
+        "empty": "暂无待审核评论",
+        "approve": "通过",
+        "delete": "删除",
+        "load_failed$message": "获取待审核评论失败，{{message}}",
+        "action_failed$message": "操作失败，{{message}}"
       }
     },
     "counter": {

@@ -182,6 +182,15 @@ export interface Comment {
   approved: boolean;
 }
 
+/** 待审核评论（后台审核列表用，附带所属文章） */
+export interface PendingComment extends Comment {
+  feed?: {
+    id: number;
+    title: string;
+    alias: string | null;
+  } | null;
+}
+
 export interface CreateCommentRequest {
   content: string;
   /** 游客昵称（未登录时必填） */

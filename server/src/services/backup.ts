@@ -1,4 +1,3 @@
-import { inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import type { AppContext } from "../core/hono-types";
 import { adminOnly } from "../core/route-boundaries";
@@ -14,187 +13,39 @@ import {
     storages,
     users,
     visitStats,
+    visits,
 } from "../db/schema";
-import { createEnvDriverIfConfigured } from "../utils/storage-drivers";
-import { driverForRow, DEFAULT_STORAGE_ID } from "../utils/storage-manager";
-import { encryptSecret, decryptSecret } from "../utils/storage-secrets";
-
-const BACKUP_SCHEMA_VERSION = 1;
-const MAX_CLOUD_BACKUPS = 3;
-const BACKUP_DIR_NAME = "backups";
-const CLOUD_BACKUPS_CACHE_KEY = "cloud_backups_list";
-const GITHUB_BACKUP_CONFIG_KEY = "github_backup_config";
-
-interface StoredGitHubConfig {
-    owner: string;
-    repo: string;
-    branch: string;
-    tokenEnc: string;
-    path: string;
-}
-
-/** 获取并解密 GitHub 备份配置（从持久化 serverConfig 中读取） */
-async function getGitHubBackupConfig(env: Env, serverConfig: any): Promise<{
-    owner: string;
-    repo: string;
-    branch: string;
-    token: string;
-    path: string;
-    configured: boolean;
-}> {
-    const rawVal = await serverConfig.get(GITHUB_BACKUP_CONFIG_KEY);
-    if (!rawVal) {
-        return { owner: "", repo: "", branch: "main", token: "", path: "backups", configured: false };
-    }
-
-    let raw: StoredGitHubConfig | null = null;
-    if (typeof rawVal === "string") {
-        try {
-            raw = JSON.parse(rawVal);
-        } catch {
-            return { owner: "", repo: "", branch: "main", token: "", path: "backups", configured: false };
-        }
-    } else if (typeof rawVal === "object") {
-        raw = rawVal as StoredGitHubConfig;
-    }
-
-    if (!raw || !raw.owner || !raw.repo || !raw.tokenEnc) {
-        return {
-            owner: raw?.owner || "",
-            repo: raw?.repo || "",
-            branch: raw?.branch || "main",
-            token: "",
-            path: raw?.path || "backups",
-            configured: false,
-        };
-    }
-
-    try {
-        const token = await decryptSecret(env, raw.tokenEnc);
-        return {
-            owner: raw.owner.trim(),
-            repo: raw.repo.trim(),
-            branch: (raw.branch || "main").trim(),
-            token,
-            path: (raw.path || "backups").trim().replace(/^\/+|\/+$/g, ""),
-            configured: Boolean(raw.owner && raw.repo && token),
-        };
-    } catch (err) {
-        console.error("[backup] decrypt github token error:", err);
-        return {
-            owner: raw.owner,
-            repo: raw.repo,
-            branch: raw.branch || "main",
-            token: "",
-            path: raw.path || "backups",
-            configured: false,
-        };
-    }
-}
-
-/** 获取当前系统可用的最佳存储驱动并规划备份目录 */
-async function getActiveStorageDriver(env: Env, db: any) {
-    const customStorages = await db.select().from(storages);
-    const active = customStorages.find((s: any) => s.enabled === 1 && s.status === "ok");
-    if (active) {
-        const driver = await driverForRow(env, active);
-        const folder = active.folder ? `${active.folder}/${BACKUP_DIR_NAME}` : BACKUP_DIR_NAME;
-        return { driver, folder, name: active.name, bucket: active.bucket, id: active.id };
-    }
-    const envDriver = createEnvDriverIfConfigured(env);
-    if (envDriver) {
-        const cleanEnvFolder = envDriver.folder.replace(/images\/?$/, "");
-        const folder = cleanEnvFolder ? `${cleanEnvFolder}/${BACKUP_DIR_NAME}` : BACKUP_DIR_NAME;
-        return { driver: envDriver.driver, folder, name: "环境变量默认存储", bucket: env.S3_BUCKET || "default", id: DEFAULT_STORAGE_ID };
-    }
-    return null;
-}
-
-/** 智能净化用户输入的云端文件路径 */
-function cleanBackupObjectKey(rawKey: string, bucketName?: string, storageName?: string): string {
-    let key = rawKey.trim().replace(/^\/+/, "");
-    if (storageName && key.startsWith(`${storageName}/`)) {
-        key = key.slice(storageName.length + 1).replace(/^\/+/, "");
-    }
-    if (bucketName && key.startsWith(`${bucketName}/`)) {
-        key = key.slice(bucketName.length + 1).replace(/^\/+/, "");
-    }
-    return key;
-}
+import { encryptSecret } from "../utils/storage-secrets";
+import {
+    assertValidSnapshot,
+    cleanBackupObjectKey,
+    CLOUD_BACKUPS_CACHE_KEY,
+    collectSecretWarnings,
+    countRows,
+    createSnapshot,
+    ensureOperatorAdmin,
+    getActiveStorageDriver,
+    getGitHubBackupConfig,
+    GITHUB_BACKUP_CONFIG_KEY,
+    loadOperator,
+    putCloudBackup,
+    type StoredGitHubConfig,
+    truncationWarnings,
+    writeSafetySnapshot,
+} from "./backup-core";
 
 export function BackupService(): Hono {
     const app = new Hono();
 
-    // 构建完整数据快照
-    async function createSnapshot(db: any) {
-        const [
-            userRows,
-            feedRows,
-            momentRows,
-            friendRows,
-            commentRows,
-            hashtagRows,
-            feedHashtagRows,
-            configRows,
-            storageRows,
-            storageFileRows,
-            visitStatRows,
-        ] = await Promise.all([
-            db.select().from(users),
-            db.select().from(feeds),
-            db.select().from(moments),
-            db.select().from(friends),
-            db.select().from(comments),
-            db.select().from(hashtags),
-            db.select().from(feedHashtags),
-            db.select().from(cache).where(inArray(cache.type, ["client.config", "server.config"])),
-            db.select().from(storages),
-            db.select().from(storageFiles),
-            db.select().from(visitStats),
-        ]);
-
-        const totalMediaBytes = storageFileRows.reduce((acc: number, f: any) => acc + (f.size || 0), 0);
-
-        return {
-            version: BACKUP_SCHEMA_VERSION,
-            app: "rin",
-            exportedAt: new Date().toISOString(),
-            metadata: {
-                counts: {
-                    feeds: feedRows.length,
-                    moments: momentRows.length,
-                    comments: commentRows.length,
-                    friends: friendRows.length,
-                    hashtags: hashtagRows.length,
-                    storages: storageRows.length,
-                    mediaFiles: storageFileRows.length,
-                },
-                mediaSummary: {
-                    totalFiles: storageFileRows.length,
-                    totalBytes: totalMediaBytes,
-                },
-            },
-            data: {
-                users: userRows,
-                feeds: feedRows,
-                moments: momentRows,
-                friends: friendRows,
-                comments: commentRows,
-                hashtags: hashtagRows,
-                feedHashtags: feedHashtagRows,
-                configs: configRows,
-                storages: storageRows,
-                storageFiles: storageFileRows,
-                visitStats: visitStatRows,
-            },
-        };
-    }
-
     // 执行数据恢复核心逻辑（严格防 SQL 变量溢出）
-    async function executeRestore(db: any, cacheManager: any, payload: any) {
-        if (!payload || !payload.data || payload.app !== "rin") {
-            throw new Error("无效的备份文件结构，请确保使用的是 Rin 导出的备份包");
-        }
+    async function executeRestore(
+        db: any,
+        cacheManager: any,
+        payload: any,
+        operator: { openid: string; username: string; avatar?: string | null } | null = null,
+    ) {
+        // 先校验结构再动数据：无效文件绝不能让现有数据被清空
+        assertValidSnapshot(payload);
 
         const data = payload.data;
 
@@ -210,17 +61,20 @@ export function BackupService(): Hono {
 
         const parseDate = (d: any) => (d ? new Date(d) : new Date());
 
-        // 1. 清理原有数据
+        // 1. 清理原有数据（按外键依赖顺序）
         await db.delete(feedHashtags);
         await db.delete(comments);
         await db.delete(visitStats);
+        await db.delete(visits);
         await db.delete(feeds);
         await db.delete(hashtags);
         await db.delete(moments);
         await db.delete(friends);
         await db.delete(storageFiles);
         await db.delete(storages);
-        await db.delete(cache).where(inArray(cache.type, ["client.config", "server.config"]));
+        // 整表清空缓存：备份里的配置行带着旧的自增 id，
+        // 若只删配置行，残留的公共缓存行会占住同样的 id 导致主键冲突。
+        await db.delete(cache);
         await db.delete(users);
 
         // 2. 依次按依赖关系恢复
@@ -296,11 +150,15 @@ export function BackupService(): Hono {
         }
 
         if (data.configs?.length) {
-            await safeInsert(cache, data.configs.map((cf: any) => ({
-                ...cf,
-                createdAt: parseDate(cf.createdAt),
-                updatedAt: parseDate(cf.updatedAt),
-            })));
+            // id 由数据库重新分配：配置只关心 key/value/type
+            await safeInsert(cache, data.configs.map((cf: any) => {
+                const { id: _id, ...rest } = cf;
+                return {
+                    ...rest,
+                    createdAt: parseDate(rest.createdAt),
+                    updatedAt: parseDate(rest.updatedAt),
+                };
+            }));
         }
 
         if (data.visitStats?.length) {
@@ -310,7 +168,20 @@ export function BackupService(): Hono {
             })));
         }
 
+        if (data.visits?.length) {
+            await safeInsert(visits, data.visits.map((v: any) => {
+                const { id: _id, ...rest } = v;
+                return { ...rest, createdAt: parseDate(rest.createdAt) };
+            }));
+        }
+
+        // 保住当前操作者的管理员身份，避免恢复完自己被锁在后台外面
+        const operatorRecreated = await ensureOperatorAdmin(db, operator);
+
+        // 恢复后清掉内存/存储里的旧缓存，避免继续返回旧数据
         await cacheManager.clear();
+
+        return { counts: await countRows(db), operatorRecreated };
     }
 
     // 0. GET /backup/preview —— 获取即将备份的数据量预览
@@ -382,63 +253,9 @@ export function BackupService(): Hono {
             return c.json({ ok: false, error: "未找到任何可用的存储桶，请先在「存储管理」绑定一个存储。" }, 400);
         }
 
-        const snapshot = await createSnapshot(db);
-        const jsonStr = JSON.stringify(snapshot, null, 2);
-        const dateStr = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-        const fileName = `rin-backup-${dateStr}.json`;
-        const objectKey = `${target.folder}/${fileName}`.replace(/\/+/g, "/");
-        const indexKey = `${target.folder}/index.json`.replace(/\/+/g, "/");
-
         try {
-            await target.driver.put(objectKey, jsonStr, "application/json");
-
-            let backupList: any[] = [];
-            try {
-                const indexRes = await target.driver.get(indexKey);
-                if (indexRes && indexRes.ok) {
-                    const text = await indexRes.text();
-                    backupList = JSON.parse(text);
-                    if (!Array.isArray(backupList)) backupList = [];
-                }
-            } catch {
-                backupList = [];
-            }
-
-            const newEntry = {
-                key: objectKey,
-                filename: fileName,
-                createdAt: snapshot.exportedAt,
-                metadata: snapshot.metadata,
-            };
-
-            backupList = backupList.filter((b) => b.key !== objectKey);
-            backupList.unshift(newEntry);
-
-            let prunedCount = 0;
-            if (backupList.length > MAX_CLOUD_BACKUPS) {
-                const toPrune = backupList.slice(MAX_CLOUD_BACKUPS);
-                backupList = backupList.slice(0, MAX_CLOUD_BACKUPS);
-                for (const old of toPrune) {
-                    if (old.key) {
-                        await target.driver.delete(old.key).catch(() => {});
-                        prunedCount++;
-                    }
-                }
-            }
-
-            await target.driver.put(indexKey, JSON.stringify(backupList, null, 2), "application/json");
-            await serverConfig.set(CLOUD_BACKUPS_CACHE_KEY, backupList, true).catch(() => {});
-
-            return c.json({
-                ok: true,
-                filename: fileName,
-                target: target.name,
-                path: objectKey,
-                exportedAt: snapshot.exportedAt,
-                metadata: snapshot.metadata,
-                totalBackups: backupList.length,
-                prunedCount,
-            });
+            const result = await putCloudBackup(target, await createSnapshot(db), serverConfig);
+            return c.json({ ok: true, ...result });
         } catch (error: any) {
             return c.json({ ok: false, error: `写入存储桶失败: ${error.message || String(error)}` }, 500);
         }
@@ -537,6 +354,7 @@ export function BackupService(): Hono {
         const db = c.get("db");
         const env = c.get("env");
         const cacheManager = c.get("cache");
+        const serverConfig = c.get("serverConfig");
 
         const body = (await c.req.json().catch(() => ({}))) as { key?: string };
         const rawKey = body.key?.trim();
@@ -546,7 +364,10 @@ export function BackupService(): Hono {
 
         const target = await getActiveStorageDriver(env, db);
         if (!target) {
-            return c.json({ ok: false, error: "存储驱动未就绪" }, 400);
+            return c.json({
+                ok: false,
+                error: "未找到可用的存储：新部署请先用环境变量（S3_*）绑定备份所在的存储桶，或在「存储管理」里重新添加该存储后再恢复。",
+            }, 400);
         }
 
         const key = cleanBackupObjectKey(rawKey, target.bucket, target.name);
@@ -558,15 +379,29 @@ export function BackupService(): Hono {
             }
 
             const payload = JSON.parse(await fileRes.text());
-            await executeRestore(db, cacheManager, payload);
+
+            // 恢复会清空现有数据，先把当前状态存一份，恢复失败还能退回去
+            const safetyKey = await writeSafetySnapshot(target, db);
+            const operator = await loadOperator(db, c.get("uid"));
+            const { counts, operatorRecreated } = await executeRestore(db, cacheManager, payload, operator);
+            const warnings = [...truncationWarnings(payload), ...await collectSecretWarnings(env, db, serverConfig)];
+            if (operatorRecreated) {
+                warnings.push("备份里的管理员不是你当前的登录账号，已把你的账号一并设为管理员，请用当前账号继续登录。");
+            }
 
             return c.json({
                 ok: true,
                 message: "从云端备份恢复成功！",
-                counts: payload.metadata?.counts || {},
+                counts,
+                safetyBackup: safetyKey,
+                warnings,
             });
         } catch (error: any) {
-            return c.json({ ok: false, error: error.message || "恢复失败" }, 500);
+            return c.json({
+                ok: false,
+                error: error.message || "恢复失败",
+                hint: "如果数据已被部分覆盖，可在存储桶的 backups/pre-restore.json 找到恢复前的自动快照。",
+            }, 500);
         }
     }));
 
@@ -592,15 +427,34 @@ export function BackupService(): Hono {
             payload = await c.req.json().catch(() => null);
         }
 
+        const env = c.get("env");
+        const serverConfig = c.get("serverConfig");
+
         try {
-            await executeRestore(db, cacheManager, payload);
+            // 存储可用时同样留一份恢复前快照
+            const target = await getActiveStorageDriver(env, db).catch(() => null);
+            const safetyKey = target ? await writeSafetySnapshot(target, db) : null;
+
+            const operator = await loadOperator(db, c.get("uid"));
+            const { counts, operatorRecreated } = await executeRestore(db, cacheManager, payload, operator);
+            const warnings = [...truncationWarnings(payload), ...await collectSecretWarnings(env, db, serverConfig)];
+            if (operatorRecreated) {
+                warnings.push("备份里的管理员不是你当前的登录账号，已把你的账号一并设为管理员，请用当前账号继续登录。");
+            }
+
             return c.json({
                 ok: true,
                 message: "数据恢复成功！",
-                counts: payload.metadata?.counts || {},
+                counts,
+                safetyBackup: safetyKey,
+                warnings,
             });
         } catch (error: any) {
-            return c.json({ ok: false, error: error.message || "恢复失败" }, 500);
+            return c.json({
+                ok: false,
+                error: error.message || "恢复失败",
+                hint: "如果数据已被部分覆盖，可在存储桶的 backups/pre-restore.json 找到恢复前的自动快照。",
+            }, 500);
         }
     }));
 
@@ -952,12 +806,18 @@ export function BackupService(): Hono {
             }
 
             const payload: any = await res.json();
-            await executeRestore(db, cacheManager, payload);
+            const operator = await loadOperator(db, c.get("uid"));
+            const { counts, operatorRecreated } = await executeRestore(db, cacheManager, payload, operator);
+            const warnings = [...truncationWarnings(payload), ...await collectSecretWarnings(env, db, serverConfig)];
+            if (operatorRecreated) {
+                warnings.push("备份里的管理员不是你当前的登录账号，已把你的账号一并设为管理员，请用当前账号继续登录。");
+            }
 
             return c.json({
                 ok: true,
                 message: "从 GitHub 备份恢复成功！",
-                counts: payload.metadata?.counts || {},
+                counts,
+                warnings,
             });
         } catch (e: any) {
             return c.json({ ok: false, error: `恢复失败: ${e.message}` }, 500);
@@ -972,3 +832,6 @@ function extractDateFromBackupName(name: string): string {
     if (!match) return "未知时间";
     return match[1].replace(/T/, " ").replace(/-/g, (m, offset) => (offset > 10 ? ":" : "-"));
 }
+
+// 兼容旧的导入路径：自动备份与快照工具已移到 backup-core.ts
+export { backupCrontab } from "./backup-core";

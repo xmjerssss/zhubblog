@@ -8,6 +8,7 @@ import { path_join } from "../utils/path";
 import { getStorageObject, getStoragePublicUrl, headStorageObject, putStorageObjectAtKey } from "../utils/storage";
 import { FAVICON_ALLOWED_TYPES, getFaviconKey } from "./favicon";
 import type { DB } from "../core/hono-types";
+import { debugLog } from "../utils/logger";
 
 // Lazy-loaded modules for RSS generation
 let Feed: any;
@@ -99,7 +100,7 @@ async function handleFeed(c: AppContext, fileName: string) {
             const response = await profileAsync(c, 'rss_s3_fetch', () => getStorageObject(env, key));
 
             if (response) {
-                console.log(`[RSS] Storage hit for ${key}`);
+                debugLog("rss", `storage hit for ${key}`);
                 const text = await profileAsync(c, 'rss_s3_body', () => response.text());
                 return c.text(text, 200, {
                     'Content-Type': contentType,
@@ -107,13 +108,13 @@ async function handleFeed(c: AppContext, fileName: string) {
                 });
             }
         } catch (e: any) {
-            console.log(`[RSS] Storage fetch failed: ${e.message}, falling back to generation`);
+            debugLog("rss", `storage fetch failed: ${e.message}, falling back to generation`);
         }
     }
     
     // Generate feed in real-time (fallback or primary mode)
     try {
-        console.log(`[RSS] Generating ${fileName} in real-time...`);
+        debugLog("rss", `generating ${fileName} in real-time`);
         const frontendUrl = configuredFrontendUrl || new URL(c.req.url).origin;
         const feed = await profileAsync(c, 'rss_generate_feed', () => generateFeed(env, db, frontendUrl, c));
         
@@ -266,7 +267,7 @@ async function generateFeed(env: Env, db: DB, frontendUrl: string, c?: AppContex
 export async function rssCrontab(env: Env, db: DB) {
     const frontendUrl = getConfiguredFrontendUrl(env);
     if (!frontendUrl) {
-        console.log('[RSS] Skipping pre-generation because FRONTEND_URL is not configured');
+        debugLog("rss", "skipping pre-generation because FRONTEND_URL is not configured");
         return;
     }
 
@@ -287,7 +288,7 @@ export async function rssCrontab(env: Env, db: DB) {
                 data,
                 name.endsWith('.json') ? 'application/json' : 'application/xml'
             );
-            console.log(`[RSS] Saved ${name} to S3`);
+            debugLog("rss", `saved ${name} to storage`);
         } catch (e: any) {
             console.error(`[RSS] Failed to save ${name}:`, e.message);
         }

@@ -49,6 +49,7 @@ Site configuration can be modified via the **Settings Page** after deployment. E
 | `WEBHOOK_URL` | No | Comment notification webhook | - | - |
 | `RSS_TITLE` | No | RSS feed title | - | - |
 | `RSS_DESCRIPTION` | No | RSS feed description | - | - |
+| `LOG_DEBUG` | No | Print debug logs for cache / RSS / sitemap (troubleshooting) | off | - |
 
 :::tip For New Users
 We recommend setting `CACHE_STORAGE_MODE` to `database` to reduce deployment complexity without additional S3 cache configuration.
@@ -68,10 +69,17 @@ These sensitive values must be configured as **Cloudflare Workers Secrets**, ent
 | `RIN_GITHUB_CLIENT_SECRET` | GitHub OAuth client secret | GitHub OAuth App settings |
 | `ADMIN_USERNAME` | Username for password login | Set yourself |
 | `ADMIN_PASSWORD` | Password for password login | Set yourself |
-| `JWT_SECRET` | JWT signing key (any random string) | Generate yourself |
+| `JWT_SECRET` | JWT signing key (**a random string of at least 32 chars**) | `openssl rand -hex 32` |
 
 :::warning Authentication Required
 You must configure either **GitHub OAuth** or **Username/Password** authentication, otherwise you cannot access the admin panel.
+:::
+
+:::danger Security notes
+- Never keep the example value for `JWT_SECRET` (such as `your-jwt-secret-key`). If it leaks, anyone can forge login tokens.
+- Avoid weak passwords like `admin123` for `ADMIN_PASSWORD`; the server logs a warning for example/weak values on startup.
+- Set `FRONTEND_URL` explicitly. OAuth redirects, the sitemap and RSS feeds all use it to build absolute links.
+- Sessions live in an HttpOnly cookie; legacy tokens in `localStorage` are cleaned up on page load.
 :::
 
 ### S3 Storage Credentials

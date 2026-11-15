@@ -1,10 +1,10 @@
 import { t } from "i18next";
 import { useContext, useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { ButtonWithLoading } from "../components/button";
+import { ButtonWithLoading } from "@rin/ui";
 import { client } from "../app/runtime";
 import { ImageUploadInput } from "../components/image-upload-input";
-import { Input } from "../components/input";
+import { Input } from "@rin/ui";
 import { ProfileContext } from "../state/profile";
 
 

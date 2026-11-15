@@ -4,6 +4,7 @@ import type { AppContext, DB } from "../core/hono-types";
 import { feedHashtags, feeds, friends, hashtags, moments } from "../db/schema";
 import { path_join } from "../utils/path";
 import { getStorageObject, putStorageObjectAtKey } from "../utils/storage";
+import { debugLog } from "../utils/logger";
 
 const SITEMAP_CACHE_FOLDER = "cache/";
 const SITEMAP_CONTENT_TYPE = "application/xml; charset=utf-8";
@@ -155,7 +156,7 @@ export function SitemapService(): Hono {
           });
         }
       } catch (e: any) {
-        console.log(`[Sitemap] cache read failed: ${e?.message}, falling back to generation`);
+        debugLog("sitemap", `cache read failed: ${e?.message}, falling back to generation`);
       }
     }
 
@@ -164,7 +165,7 @@ export function SitemapService(): Hono {
       try {
         await putStorageObjectAtKey(env, key, xml, "application/xml");
       } catch (e: any) {
-        console.log(`[Sitemap] cache write failed: ${e?.message}`);
+        debugLog("sitemap", `cache write failed: ${e?.message}`);
       }
     }
 
@@ -190,7 +191,7 @@ export function SitemapService(): Hono {
           });
         }
       } catch (e: any) {
-        console.log(`[Sitemap] robots cache read failed: ${e?.message}, falling back to generation`);
+        debugLog("sitemap", `robots cache read failed: ${e?.message}, falling back to generation`);
       }
     }
 
@@ -199,7 +200,7 @@ export function SitemapService(): Hono {
       try {
         await putStorageObjectAtKey(env, key, robots, "text/plain");
       } catch (e: any) {
-        console.log(`[Sitemap] robots cache write failed: ${e?.message}`);
+        debugLog("sitemap", `robots cache write failed: ${e?.message}`);
       }
     }
 
@@ -215,7 +216,7 @@ export function SitemapService(): Hono {
 // 定时任务：预生成 sitemap.xml 与 robots.txt 并写入存储桶（与 rssCrontab 同构）
 export async function sitemapCrontab(env: Env, db: DB) {
   if (!hasConfiguredBaseUrl(env)) {
-    console.log("[Sitemap] Skipping pre-generation because FRONTEND_URL is not configured");
+    debugLog("sitemap", "skipping pre-generation because FRONTEND_URL is not configured");
     return;
   }
 
@@ -224,7 +225,7 @@ export async function sitemapCrontab(env: Env, db: DB) {
   try {
     const xml = await generateSitemapXml(env, db);
     await putStorageObjectAtKey(env, path_join(folder, "sitemap.xml"), xml, "application/xml");
-    console.log("[Sitemap] Saved sitemap.xml to storage");
+    debugLog("sitemap", "saved sitemap.xml to storage");
   } catch (e: any) {
     console.error(`[Sitemap] Failed to save sitemap.xml: ${e?.message}`);
   }
@@ -232,7 +233,7 @@ export async function sitemapCrontab(env: Env, db: DB) {
   try {
     const robots = generateRobotsTxt(env);
     await putStorageObjectAtKey(env, path_join(folder, "robots.txt"), robots, "text/plain");
-    console.log("[Sitemap] Saved robots.txt to storage");
+    debugLog("sitemap", "saved robots.txt to storage");
   } catch (e: any) {
     console.error(`[Sitemap] Failed to save robots.txt: ${e?.message}`);
   }

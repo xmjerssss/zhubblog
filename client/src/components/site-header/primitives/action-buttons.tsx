@@ -6,10 +6,10 @@ import { useLocation } from "wouter";
 import { client } from "../../../app/runtime";
 import { ClientConfigContext } from "../../../state/config";
 import { type Profile } from "../../../state/profile";
-import { removeAuthToken } from "../../../utils/auth";
+import { clearLegacyAuthToken } from "../../../utils/auth";
 import { ImageWithFallback } from "../../image-with-fallback";
-import { Button } from "../../button";
-import { Input } from "../../input";
+import { Button } from "@rin/ui";
+import { Input } from "@rin/ui";
 import { HEADER_POPUP_PANEL_CLASS } from "../shared";
 
 export function HeaderActions({
@@ -216,7 +216,7 @@ export function UserAvatar({
               onClick={async () => {
                 setIsOpen(false);
                 await client.user.logout();
-                removeAuthToken();
+                clearLegacyAuthToken();
                 window.location.reload();
               }}
               className="flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-rose-600 transition-colors hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/30"

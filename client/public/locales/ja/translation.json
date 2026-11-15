@@ -104,7 +104,8 @@
     "guest_name_required": "ゲスト名は必須です",
     "guest_name_placeholder": "名前（必須）",
     "guest_email_placeholder": "メール（任意）",
-    "guest_website_placeholder": "ウェブサイト（任意）"
+    "guest_website_placeholder": "ウェブサイト（任意）",
+    "pending": "コメントを投稿しました。承認後に表示されます"
   },
   "comparison": "対比",
   "confirm": "確認",
@@ -204,7 +205,16 @@
   "listed": "記事にリスト",
   "load_more": "もっと読み込む",
   "login": {
+    "error": {
+      "empty": "ユーザー名とパスワードを入力してください",
+      "failed": "ログインに失敗しました",
+      "invalid": "ユーザー名またはパスワードが正しくありません",
+      "network": "ネットワークエラーです。もう一度お試しください"
+    },
+    "loading": "ログイン中...",
+    "no_methods": "利用可能なログイン方法がありません",
     "oauth_only": "続行するにはログインしてください",
+    "or": "または",
     "password": {
       "placeholder": "パスワードを入力してください"
     },
@@ -291,6 +301,19 @@
       "enable": {
         "desc": "記事下部のコメント入り口とコメントエリアの開閉",
         "title": "コメントを有効にする"
+      },
+      "approval": {
+        "title": "コメント承認を必須にする",
+        "desc": "オンにすると新しいコメントは承認待ちに入り、承認後に全員へ表示されます（管理者自身のコメントは即時反映）"
+      },
+      "moderation": {
+        "title": "承認待ちコメント",
+        "refresh": "更新",
+        "empty": "承認待ちのコメントはありません",
+        "approve": "承認",
+        "delete": "削除",
+        "load_failed$message": "承認待ちコメントの取得に失敗しました。{{message}}",
+        "action_failed$message": "操作に失敗しました。{{message}}"
       }
     },
     "counter": {

@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/d1";
 import { CacheImpl } from "../utils/cache";
+import { configureLogging } from "../utils/logger";
 import { isQueueTask, FEED_AI_SUMMARY_TASK } from "../queue";
 import { processFeedAISummaryTask } from "../services/feed-ai-summary";
 import { clearFeedCache } from "../services/feed";
@@ -9,6 +10,8 @@ export async function handleQueue(
   env: Env,
   _ctx: ExecutionContext,
 ) {
+  configureLogging(env);
+
   const schema = await import("../db/schema");
   const db = drizzle(env.DB, { schema });
   const serverConfig = new CacheImpl(db, env, "server.config", "database");

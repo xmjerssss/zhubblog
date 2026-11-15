@@ -27,5 +27,14 @@ export function bootstrapApp() {
       },
     });
 
+  // 让 <html lang> 跟随实际语言，读屏软件与搜索引擎都依赖它
+  const syncHtmlLang = (lng?: string) => {
+    if (lng) {
+      document.documentElement.lang = lng;
+    }
+  };
+  i18n.on("languageChanged", syncHtmlLang);
+  syncHtmlLang(i18n.resolvedLanguage || i18n.language);
+
   bootstrapped = true;
 }

@@ -1,3 +1,4 @@
+import { configureLogging } from "../utils/logger";
 import { getApp } from "./app-instance";
 
 const ROOT_FEED_PATTERN = /^\/(rss\.xml|atom\.xml|rss\.json|feed\.json|feed\.xml)$/;
@@ -68,6 +69,8 @@ export async function handleFetch(
   env: Env,
   executionContext?: ExecutionContext,
 ): Promise<Response> {
+  configureLogging(env);
+
   const url = new URL(request.url);
   const pathname = url.pathname;
 

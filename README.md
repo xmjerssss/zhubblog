@@ -110,14 +110,25 @@ The deployment script will automatically:
 - Build and deploy frontend to Pages
 - Run database migrations
 
+### Backup and Disaster Recovery
+
+Every deployment can be restored from a single JSON snapshot stored in your own bucket:
+
+- The Worker writes a full snapshot to `backups/rin-backup-*.json` once a day (tune with the `backup_auto_interval_hours` server config, `0` disables it) and keeps the newest 3.
+- Dashboard → Settings → Backup can export/restore on demand, and also backs up to a GitHub repository if you prefer.
+- If your Cloudflare account is lost, rebuild the Worker in a new account, point `S3_*` at the same bucket, then hit **Restore from cloud storage** — content, comments, friends, moments, site config, storage mappings and visit data all come back. The current pre-restore state is always saved to `backups/pre-restore.json` first.
+
+Step-by-step instructions (including what to write down *before* disaster strikes): [docs/docs/en/guide/disaster-recovery.md](docs/docs/en/guide/disaster-recovery.md) · [中文](docs/docs/zh/guide/disaster-recovery.md)
+
 ### GitHub Actions Workflows
 
 The repository includes several automated workflows:
 
-- **`ci.yml`** - Runs type checking and formatting validation on every push/PR
-- **`test.yml`** - Runs comprehensive tests (server + client) with coverage reporting
-- **`build.yml`** - Builds the project and triggers deployment
-- **`deploy.yml`** - Deploys to Cloudflare Pages and Workers
+- **`test.yml`** - Type checks every package and runs the full test suite (server + client + UI)
+- **`build.yml`** - Builds the project and publishes build artifacts
+- **`deploy.yml`** - Deploys to Cloudflare Pages and Workers (production on `main`, previews for PRs and forks)
+- **`clean.yml`** - Removes the preview Worker when a pull request is closed
+- **`release.yml`** / **`docs.yml`** - Tag-driven releases and documentation publishing
 
 **Required secrets (Repository Settings → Secrets and variables → Actions):**
 

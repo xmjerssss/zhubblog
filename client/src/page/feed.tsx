@@ -8,7 +8,7 @@ import { Link, useLocation } from "wouter";
 import { useAlert, useConfirm } from "../components/dialog";
 import { HashTag } from "../components/hashtag";
 import { ImageWithFallback } from "../components/image-with-fallback";
-import { Waiting } from "../components/loading";
+import { Waiting } from "@rin/ui";
 import { Markdown } from "../components/markdown";
 import { client } from "../app/runtime";
 import { ClientConfigContext } from "../state/config";
@@ -16,7 +16,7 @@ import { ProfileContext } from "../state/profile";
 import { useSiteConfig } from "../hooks/useSiteConfig";
 import { siteName } from "../utils/constants";
 import { timeago } from "../utils/timeago";
-import { Button } from "../components/button";
+import { Button } from "@rin/ui";
 import { Tips } from "../components/tips";
 import mermaid from "mermaid";
 import { AdjacentSection } from "../components/adjacent_feed.tsx";
@@ -385,13 +385,15 @@ function CommentInput({
     if (profile) {
       client.comment
         .create(parseInt(id), { content })
-        .then(({ error }) => {
+        .then(({ data, error }) => {
           if (error) {
             setError(errorHumanize(error.value as string));
           } else {
             setContent("");
             setError("");
-            showAlert(t("comment.success"), () => {
+            // 评论需要审核时服务端不会立刻展示，这里给出对应提示
+            const pending = (data as unknown as string) === "Pending approval";
+            showAlert(pending ? t("comment.pending") : t("comment.success"), () => {
               onRefresh();
             });
           }
@@ -408,7 +410,7 @@ function CommentInput({
           guestEmail: guestEmail.trim() || undefined,
           guestWebsite: guestWebsite.trim() || undefined,
         })
-        .then(({ error }) => {
+        .then(({ data, error }) => {
           if (error) {
             setError(errorHumanize(error.value as string));
           } else {
@@ -417,7 +419,8 @@ function CommentInput({
             setGuestEmail("");
             setGuestWebsite("");
             setError("");
-            showAlert(t("comment.success"), () => {
+            const pending = (data as unknown as string) === "Pending approval";
+            showAlert(pending ? t("comment.pending") : t("comment.success"), () => {
               onRefresh();
             });
           }

@@ -1,11 +1,10 @@
 import { t } from "i18next";
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { ButtonWithLoading } from "../components/button";
-import { Icon } from "../components/icon";
-import { Input } from "../components/input";
+import { ButtonWithLoading } from "@rin/ui";
+import { Icon } from "@rin/ui";
+import { Input } from "@rin/ui";
 import { client, oauth_url } from "../app/runtime";
-import { setAuthToken } from "../utils/auth";
 import { getLoginRedirectPath } from "../utils/auth-redirect";
 
 export function LoginPage() {
@@ -44,10 +43,7 @@ export function LoginPage() {
             }
 
             if (data?.success) {
-                // Save token to localStorage for cross-domain auth
-                if (data.token) {
-                    setAuthToken(data.token);
-                }
+                // 登录态由服务端 HttpOnly cookie 承载，前端不保存 token
                 setLocation(getLoginRedirectPath(window.location.search));
                 window.location.reload();
             } else {

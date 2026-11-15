@@ -61,6 +61,13 @@ jobs:
 
       - name: Set deployment type
         id: meta
+        env:
+          # 用 workflow_run 自带的元数据判断，而不是构建产物里的 build-meta：
+          # 产物内容来自 PR 分支，可以被修改后冒充 main 分支触发生产部署。
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          BASE_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             # Manual deployment
@@ -71,16 +78,16 @@ jobs:
             fi
             echo "pr_number=0" >> $GITHUB_OUTPUT
           else
-            # Auto deployment from workflow_run - check ref
-            REF=$(cat ./artifacts/build-meta/ref 2>/dev/null || echo "unknown")
-            if [[ "$REF" == "refs/heads/main" || "$REF" == "refs/heads/master" ]]; then
+            # 只有本仓库 main/trunk 的构建才允许进生产；来自 fork 的运行一律走预览。
+            if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+              echo "Fork workflow_run ($HEAD_REPO), deploying preview only."
+              echo "is_production=false" >> $GITHUB_OUTPUT
+            elif [ "$HEAD_BRANCH" == "main" ] || [ "$HEAD_BRANCH" == "trunk" ]; then
               echo "is_production=true" >> $GITHUB_OUTPUT
             else
               echo "is_production=false" >> $GITHUB_OUTPUT
             fi
-            # Read PR number from build-meta
-            PR_NUMBER=$(cat ./artifacts/build-meta/pr_number 2>/dev/null || echo "0")
-            echo "pr_number=${PR_NUMBER}" >> $GITHUB_OUTPUT
+            echo "pr_number=${PR_NUMBER:-0}" >> $GITHUB_OUTPUT
           fi
 
       - name: Upload artifacts for deploy job
