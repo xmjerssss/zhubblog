@@ -10,6 +10,8 @@ declare global {
     STORAGE_SECRET?: string;
     /** 设为 1/true 时输出缓存、RSS 等调试日志（默认关闭） */
     LOG_DEBUG?: string;
+    /** 密码 PBKDF2 迭代次数（默认 10000）。调高更安全，但免费计划 CPU 只有 10ms/请求 */
+    PASSWORD_HASH_ITERATIONS?: string;
   }
 }
 

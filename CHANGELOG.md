@@ -13,7 +13,8 @@ which automatically generates release notes from commit messages.
 
 ### Added
 - **登录限流**: `/auth/login` 增加按 IP 与按账号的双重限流（15 分钟窗口），超限返回 429 并带 `Retry-After`。
-- **旧的密码哈希自动升级**: 登录成功后，历史上的单轮 SHA-256 哈希会自动升级为 PBKDF2（150k 迭代 + 随机盐）。
+- **可配置的密码哈希强度**: 新增 `PASSWORD_HASH_ITERATIONS`（默认 10000），并在服务端对超过 50000 的配置打印告警；哈希串自带迭代次数，升/降配都能在登录时自动收敛，无需迁移数据。
+- **旧密码哈希自动升级**: 登录成功后，历史上的单轮 SHA-256 哈希会在响应发送之后（后台任务）按当前配置重算为 PBKDF2（随机盐）。
 - **配置体检**: 启动时检测示例 / 弱口令的 `JWT_SECRET`、`ADMIN_PASSWORD`，以及缺失的 `FRONTEND_URL`，并打印警告。
 - **来源白名单工具**: 新增 `utils/origin.ts`，统一处理 CORS 与 OAuth 回跳的可信来源判断。
 - **安全 HTML 清洗**: Markdown 渲染新增 `rehypeSafeHtml`，移除 `script`、内联事件、`srcdoc`、`javascript:` 等执行向量，同时保留 katex / mermaid / 代码高亮所需的 class。
@@ -50,11 +51,14 @@ which automatically generates release notes from commit messages.
 - **恢复后把自己锁在门外**: 恢复整表替换 `users`，现在会保留当前操作者的管理员身份，即使备份里的站长是另一个 GitHub 账号。
 - **换账号后存储不可用**: 恢复时无法解密的存储密钥会被跳过并给出提示，备份/恢复与媒体读取都会回退到环境变量默认存储，不再整站 404。
 - **恢复前没有退路**: 恢复前自动把当前数据写入桶内 `backups/pre-restore.json`，并支持恢复接口在失败时提示该快照位置。
+- **管理员无法登录（error 1102）**: 登录时 PBKDF2 固定用 150k 迭代，实测 30ms 以上，在 Workers 免费计划（10ms CPU/请求）会直接超出 CPU 限额，表现为「密码正确却登录失败」。现在默认迭代数降到 10000，可用 `PASSWORD_HASH_ITERATIONS` 调整，并把哈希重算移到响应之后，单个登录请求只承担一次验签的 CPU。
+- **登录成功仍显示未登录**: 登录回调页改用整页跳转（而不是前端路由），确保应用带着新的 HttpOnly cookie 重新初始化用户状态。
+- **文档站部署失败**: `docs.yml` 的 `configure-pages` 增加 `enablement: true`，仓库未启用 Pages 时自动启用，不再以 `Get Pages site failed` 失败。
 
 ### Security
 - **CORS**: 不再反射任意 Origin，只对白名单来源返回 `Access-Control-Allow-Origin`（仍保留 `credentials`）。
 - **JWT**: 令牌增加 `exp`（默认 7 天）、`iss`、`aud`，并校验算法。**升级后旧令牌全部失效，需要重新登录一次。**
-- **密码存储**: PBKDF2-SHA256（150k 迭代、随机盐、常量时间比较），替换原来的单轮 SHA-256。
+- **密码存储**: PBKDF2-SHA256（随机盐、常量时间比较）替换原来的单轮 SHA-256；迭代次数默认 10000 且可配置，取值需匹配 Workers 计划的 CPU 预算（见 `docs/docs/zh/env.md` 的「密码哈希强度」）。
 - **登录 / OAuth**: state 校验改为常量时间比较，state 与 redirect cookie 均改为 HttpOnly + SameSite=Lax。
 
 ## [v0.3.0] - 2026-03-12

@@ -127,3 +127,36 @@
 | `bun test` 整仓 | **498 pass / 0 fail**（54 个文件；新增 4 个评论审核、2 个备份截断用例） |
 | `tsc --noEmit`（server / client） | 均 0 错误 |
 | `vite build`（client） | 成功 |
+
+## 十、线上回归：管理员登录不上（error 1102）
+
+上线后站长反馈「改完后管理员无法登录」。按状态码先分诊：
+
+| 现象 | 含义 |
+| --- | --- |
+| **500 / `error code: 1102`** | Worker 超出 CPU 时间——本轮的真问题 |
+| 403 | 账号/密码不匹配，或 `ADMIN_USERNAME` 与库里的用户名不一致 |
+| 429 | 登录限流（IP 20 次 / 15 分钟，IP+账号 10 次 / 15 分钟） |
+| 200 但仍显示未登录 | cookie 域 / `FRONTEND_URL` 与访问域名不一致 |
+
+根因：上一轮把密码哈希换成 PBKDF2-SHA256 时固定用 **150k 迭代**。PBKDF2 是纯 CPU 计算，本地实测 150k ≈ 31ms、100k ≈ 21ms、50k ≈ 8ms、10k ≈ 1.7ms，而 Cloudflare Workers **免费计划每请求只有 10ms CPU**，登录请求必然超限——密码是对的，但请求在算完之前就被掐掉了。
+
+修复：
+
+1. 默认迭代数降到 `10_000`，新增 `PASSWORD_HASH_ITERATIONS` 环境变量（非法值回落到默认，上界 1,000,000 防误配）；
+2. 哈希串本身带迭代次数（`pbkdf2$<iterations>$<salt>$<hash>`），`needsRehash(stored, target)` 现在「旧 SHA-256 格式」或「迭代数与当前配置不一致」都返回真，所以升配/降配都能在下次登录时自动收敛，**不需要写迁移脚本**；
+3. 重算哈希（管理员用户名同步后的重算、普通用户的旧哈希升级）全部移到 `runInBackground()`（`executionCtx.waitUntil`）里，登录请求只付一次验签的 CPU，而不是「验证 + 重算」两次；
+4. `config-guard` 对 `PASSWORD_HASH_ITERATIONS > 50000` 打印警告，直接点明免费计划的 10ms 预算；
+5. 登录回调页改成 `window.location.replace("/")` 整页跳转，确保带着新下发的 HttpOnly cookie 重新初始化 profile，避免「登录成功但界面还是未登录」。
+
+顺带修了 `docs.yml`：`actions/configure-pages@v5` 增加 `enablement: true`，仓库没开 Pages 时自动启用，不再以 `Get Pages site failed` 失败（与本轮登录问题无关）。
+
+## 十一、第三轮验证
+
+| 检查 | 结果 |
+| --- | --- |
+| `bun test` 整仓 | **501 pass / 0 fail**（新增 3 个密码迭代数回归用例） |
+| `tsc --noEmit`（server / client） | 均 0 错误 |
+| `vite build`（client） | 成功 |
+
+> 说明：验证树里 `bun install` 不可用，改用 pnpm + `pnpm.overrides` 复现依赖。第一次把 1017 个包全部钉死成单版本，导致 10 个 RSS 用例因为 `character-entities-legacy` 版本错配而假失败；改成「只锁定全仓只有一个版本的包」后全部通过。

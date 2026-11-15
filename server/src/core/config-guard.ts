@@ -11,6 +11,8 @@ const PLACEHOLDER_SECRETS = new Set([
 
 const WEAK_ADMIN_PASSWORDS = new Set(['admin123', 'admin', 'password', '123456']);
 
+const SAFE_ITERATIONS_CEILING = 50_000;
+
 let warned = false;
 
 export function warnInsecureDefaults(env: Env): void {
@@ -24,6 +26,16 @@ export function warnInsecureDefaults(env: Env): void {
         console.warn(
             '[config] JWT_SECRET 仍是示例值或过短，任何人都能伪造登录令牌。' +
             '请改成 >=32 位的随机字符串（例如 openssl rand -hex 32）。',
+        );
+    }
+
+    // PBKDF2 是纯 CPU 计算：免费计划每请求只有 10ms CPU，配太高会导致登录直接
+    // 以 error 1102 失败（密码正确也进不去）。
+    const iterations = Number.parseInt(String(env.PASSWORD_HASH_ITERATIONS ?? ""), 10);
+    if (Number.isFinite(iterations) && iterations > SAFE_ITERATIONS_CEILING) {
+        console.warn(
+            `[config] PASSWORD_HASH_ITERATIONS=${iterations} 超过建议上限 ${SAFE_ITERATIONS_CEILING}。` +
+            'Cloudflare Workers 免费计划每请求只有 10ms CPU，PBKDF2 迭代过高会让登录请求超时失败（error 1102）。'
         );
     }
 

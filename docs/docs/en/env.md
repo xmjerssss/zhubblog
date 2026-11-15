@@ -50,6 +50,18 @@ Site configuration can be modified via the **Settings Page** after deployment. E
 | `RSS_TITLE` | No | RSS feed title | - | - |
 | `RSS_DESCRIPTION` | No | RSS feed description | - | - |
 | `LOG_DEBUG` | No | Print debug logs for cache / RSS / sitemap (troubleshooting) | off | - |
+| `PASSWORD_HASH_ITERATIONS` | No | PBKDF2 iterations for password hashing, see below | 10000 | 10000 (free plan) |
+
+### Password hashing strength
+
+`PASSWORD_HASH_ITERATIONS` controls how many PBKDF2 iterations are used for password login. The iteration count is stored inside each hash (`pbkdf2$<iterations>$<salt>$<hash>`), so changing the value needs no data migration.
+
+| Scenario | Suggested value | Notes |
+|----------|-----------------|-------|
+| Cloudflare Workers Free plan | `10000` (default) | The free plan allows only **10ms CPU per request**. 150k iterations measured 30ms+, so the login request fails with `error 1102` (exceeded CPU time) — which looks exactly like "the password is right but I can't log in". |
+| Workers Paid plan | `50000` – `150000` | More CPU headroom, tune as needed. |
+
+After a successful login the hash is recomputed with the current setting **after the response is sent** (background task), so both legacy hashes and hashes with an older iteration count converge automatically. If login still fails, make sure the value is not above `50000`; the server logs a warning on startup for values above that.
 
 :::tip For New Users
 We recommend setting `CACHE_STORAGE_MODE` to `database` to reduce deployment complexity without additional S3 cache configuration.
