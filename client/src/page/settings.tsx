@@ -4,7 +4,8 @@ import { Helmet } from "react-helmet";
 import { useTranslation } from "react-i18next";
 import ReactLoading from "react-loading";
 import { client, oauth_url } from "../app/runtime";
-import { Button } from "../components/button";
+import { Button } from "@rin/ui";
+import { CommentModerationList } from "../components/comment-moderation";
 import { useAlert } from "../components/dialog";
 import { HeaderLayoutPreview } from "../components/site-header/layout-preview";
 import {
@@ -778,6 +779,19 @@ export function Settings() {
               setConfigValue("client", "comment.enabled", checked);
             }}
           />
+          <ItemSwitch
+            title={t("settings.comment.approval.title")}
+            description={t("settings.comment.approval.desc")}
+            checked={Boolean(serverConfig.get("comment.require_approval"))}
+            onChange={(checked) => {
+              setConfigValue("server", "comment.require_approval", checked);
+            }}
+          />
+          {Boolean(serverConfig.get("comment.require_approval")) && (
+            <div className="w-full py-2">
+              <CommentModerationList />
+            </div>
+          )}
           <ItemSwitch
             title={t("settings.counter.enable.title")}
             description={t("settings.counter.enable.desc")}

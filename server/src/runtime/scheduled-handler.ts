@@ -1,11 +1,14 @@
 import { drizzle } from "drizzle-orm/d1";
 import { CacheImpl } from "../utils/cache";
+import { configureLogging } from "../utils/logger";
 
 export async function handleScheduled(
   _controller: ScheduledController | null,
   env: Env,
   ctx: ExecutionContext,
 ) {
+  configureLogging(env);
+
   const schema = await import("../db/schema");
   const db = drizzle(env.DB, { schema });
 

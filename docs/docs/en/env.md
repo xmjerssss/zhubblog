@@ -49,6 +49,7 @@ Site configuration can be modified via the **Settings Page** after deployment. E
 | `WEBHOOK_URL` | No | Comment notification webhook | - | - |
 | `RSS_TITLE` | No | RSS feed title | - | - |
 | `RSS_DESCRIPTION` | No | RSS feed description | - | - |
+| `LOG_DEBUG` | No | Print debug logs for cache / RSS / sitemap (troubleshooting) | off | - |
 
 :::tip For New Users
 We recommend setting `CACHE_STORAGE_MODE` to `database` to reduce deployment complexity without additional S3 cache configuration.

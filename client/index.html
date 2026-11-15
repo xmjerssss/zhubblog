@@ -3,14 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    
-    <!-- 彻底解除网易云全站图片防盗链拦截，确保封面能够正常加载 -->
-    <meta name="referrer" content="no-referrer" />
 
+    <!--
+      网易云音乐封面有全站防盗链，no-referrer 可以让封面正常加载。
+      副作用是本站对外链接也不再携带来源信息，属于预期的隐私取向取舍。
+    -->
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#fc466b" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)" />
+
+    <!-- 首屏占位，避免 JS 加载期间的空白闪烁；真实标题由 react-helmet 接管 -->
+    <title>Rin</title>
+    <meta name="description" content="A lightweight personal blogging system" />
+
+    <!--
+      站点配置由服务端注入（名称、头像、主题等），必须早于应用脚本执行。
+      data-cfasync="false" 让 Cloudflare 的 Rocket Loader 不要延迟它。
+    -->
     <script data-cfasync="false" src="/api/config/client/bootstrap.js"></script>
-    
-    <!-- Umami 网站统计代码 -->
-    <script defer src="https://cloud.umami.is/script.js" data-website-id="013b459a-f472-49ea-80e2-bcc3c80f4eb7"></script>
   </head>
   <body>
     <div id="root"></div>

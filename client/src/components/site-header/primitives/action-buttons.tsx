@@ -8,8 +8,8 @@ import { ClientConfigContext } from "../../../state/config";
 import { type Profile } from "../../../state/profile";
 import { clearLegacyAuthToken } from "../../../utils/auth";
 import { ImageWithFallback } from "../../image-with-fallback";
-import { Button } from "../../button";
-import { Input } from "../../input";
+import { Button } from "@rin/ui";
+import { Input } from "@rin/ui";
 import { HEADER_POPUP_PANEL_CLASS } from "../shared";
 
 export function HeaderActions({

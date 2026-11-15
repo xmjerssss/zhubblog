@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import type { AppContext } from "../core/hono-types";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { comments, feeds, users } from "../db/schema";
+import { adminOnly } from "../core/route-boundaries";
 import { profileAsync } from "../core/server-timing";
 import { notify } from "../utils/webhook";
 import { resolveWebhookConfig } from "./config-helpers";
@@ -23,12 +24,34 @@ function isHttpUrl(value: string): boolean {
 export function CommentService(): Hono {
     const app = new Hono();
 
+    // 待审核列表（必须先于 /:feed 注册，否则会被当成文章 id）
+    app.get('/pending', adminOnly(async (c: AppContext) => {
+        const db = c.get('db');
+
+        const pending = await profileAsync(c, 'comment_pending_db', () => db.query.comments.findMany({
+            where: eq(comments.approved, 0),
+            with: {
+                user: { columns: { id: true, username: true, avatar: true, permission: true } },
+                feed: { columns: { id: true, title: true, alias: true } },
+            },
+            orderBy: [desc(comments.createdAt)],
+        }));
+
+        return c.json(pending);
+    }));
+
     app.get('/:feed', async (c: AppContext) => {
         const db = c.get('db');
+        const admin = c.get('admin');
         const feedId = parseInt(c.req.param('feed'));
-        
+
+        // 未审核的评论只有管理员能看到，其他人等审核通过后再显示
+        const where = admin
+            ? eq(comments.feedId, feedId)
+            : and(eq(comments.feedId, feedId), eq(comments.approved, 1));
+
         const comment_list = await profileAsync(c, 'comment_list_db', () => db.query.comments.findMany({
-            where: eq(comments.feedId, feedId),
+            where,
             columns: { feedId: false, userId: false },
             with: {
                 user: {
@@ -60,6 +83,9 @@ export function CommentService(): Hono {
         const env = c.get('env');
         const serverConfig = c.get('serverConfig');
         const uid = c.get('uid');
+        const admin = c.get('admin');
+        const requireApproval = Boolean(await c.get('serverConfig').get('comment.require_approval'));
+        const needsApproval = requireApproval && !admin;
         const feedId = parseInt(c.req.param('feed'));
         const body = await profileAsync(c, 'comment_create_parse', () => c.req.json()) as {
             content?: unknown;
@@ -114,7 +140,8 @@ export function CommentService(): Hono {
             await db.insert(comments).values({
                 feedId,
                 userId: uid,
-                content
+                content,
+                approved: needsApproval ? 0 : 1,
             });
 
             const { webhookUrl, webhookMethod, webhookContentType, webhookHeaders, webhookBodyTemplate } =
@@ -125,7 +152,7 @@ export function CommentService(): Hono {
                     webhookUrl || "",
                     {
                         event: "comment.created",
-                        message: `${frontendUrl}/feed/${feedId}\n${user.username} 评论了: ${exist.title}\n${content}`,
+                        message: `${frontendUrl}/feed/${feedId}\n${needsApproval ? "[待审核] " : ""}${user.username} 评论了: ${exist.title}\n${content}`,
                         title: exist.title || "",
                         url: `${frontendUrl}/feed/${feedId}`,
                         username: user.username,
@@ -141,7 +168,7 @@ export function CommentService(): Hono {
             } catch (error) {
                 console.error("Failed to send comment webhook", error);
             }
-            return c.text('OK');
+            return c.text(needsApproval ? 'Pending approval' : 'OK');
         }
 
         // 游客评论
@@ -156,7 +183,7 @@ export function CommentService(): Hono {
             guestName,
             guestEmail,
             guestWebsite,
-            approved: 1,
+            approved: needsApproval ? 0 : 1,
         });
 
         const { webhookUrl, webhookMethod, webhookContentType, webhookHeaders, webhookBodyTemplate } =
@@ -167,7 +194,7 @@ export function CommentService(): Hono {
                 webhookUrl || "",
                 {
                     event: "comment.created",
-                    message: `${frontendUrl}/feed/${feedId}\n游客 ${guestName} 评论了: ${exist.title}\n${content}`,
+                    message: `${frontendUrl}/feed/${feedId}\n${needsApproval ? "[待审核] " : ""}游客 ${guestName} 评论了: ${exist.title}\n${content}`,
                     title: exist.title || "",
                     url: `${frontendUrl}/feed/${feedId}`,
                     username: guestName,
@@ -183,8 +210,25 @@ export function CommentService(): Hono {
         } catch (error) {
             console.error("Failed to send comment webhook", error);
         }
-        return c.text('OK');
+        return c.text(needsApproval ? 'Pending approval' : 'OK');
     });
+
+    // 审核通过：只有管理员能操作
+    app.patch('/:id/approve', adminOnly(async (c: AppContext) => {
+        const db = c.get('db');
+        const id = parseInt(c.req.param('id'));
+        if (!Number.isFinite(id)) {
+            return c.text('Invalid comment id', 400);
+        }
+
+        const comment = await profileAsync(c, 'comment_approve_lookup', () => db.query.comments.findFirst({ where: eq(comments.id, id) }));
+        if (!comment) {
+            return c.text('Not found', 404);
+        }
+
+        await db.update(comments).set({ approved: 1 }).where(eq(comments.id, id));
+        return c.text('OK');
+    }));
 
     app.delete('/:id', async (c: AppContext) => {
         const db = c.get('db');

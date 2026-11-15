@@ -49,6 +49,7 @@ Rin 部署需要配置两类环境变量：**Variables（明文变量）**和**S
 | `WEBHOOK_URL` | 否 | 评论通知 Webhook | - | - |
 | `RSS_TITLE` | 否 | RSS 标题 | - | - |
 | `RSS_DESCRIPTION` | 否 | RSS 描述 | - | - |
+| `LOG_DEBUG` | 否 | 输出缓存 / RSS / sitemap 调试日志（排障用） | 关闭 | - |
 
 :::tip 新用户推荐
 建议将 `CACHE_STORAGE_MODE` 设为 `database`，无需额外配置 S3 缓存即可使用，降低部署复杂度。

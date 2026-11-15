@@ -18,6 +18,9 @@ which automatically generates release notes from commit messages.
 - **来源白名单工具**: 新增 `utils/origin.ts`，统一处理 CORS 与 OAuth 回跳的可信来源判断。
 - **安全 HTML 清洗**: Markdown 渲染新增 `rehypeSafeHtml`，移除 `script`、内联事件、`srcdoc`、`javascript:` 等执行向量，同时保留 katex / mermaid / 代码高亮所需的 class。
 - **自动备份**: 定时任务默认每 24 小时往存储桶写一份全量快照（`backup_auto_interval_hours` 可调，`0` 关闭），保证账号出事时桶里总有近期备份。
+- **评论审核**: `comment.require_approval` 开关正式接线——非管理员的评论先进入待审核，后台可在设置页查看并通过/删除（`GET /comment/pending`、`PATCH /comment/:id/approve`）。
+- **统一日志出口**: 新增 `utils/logger.ts`，缓存/RSS/sitemap 的调试日志默认静默，`LOG_DEBUG=1` 时输出；请求、定时任务、队列入口统一初始化。
+- **可选统计**: 统计脚本改为 `VITE_UMAMI_WEBSITE_ID` 配置后才加载，不再把访客数据发到上游作者的账号。
 - **灾难恢复文档**: 新增 `docs/docs/{zh,en}/guide/disaster-recovery.md`，完整说明「新账号 + 原存储桶」的恢复步骤与收尾检查。
 
 ### Changed
@@ -25,6 +28,7 @@ which automatically generates release notes from commit messages.
 - **浏览量统计**: 管理员本人与常见爬虫 / 预览机器人不再计入 PV/UV；访问明细中的 IP 改为加盐哈希存储。
 - **路由按需加载**: 设置、写作、存储等后台页面改为 `React.lazy`，首屏 JS 由 ~6.36 MB 降至 ~2.04 MB。
 - **CI 精简**: 合并重复的多份工作流，移除从未生效的 `format:check` 门禁；`@rin/api`、`@rin/config`、`@rin/ui` 纳入 `turbo check`。
+- **结构**: `services/backup.ts` 拆出 `backup-core.ts`（纯逻辑）与路由层；`footer.tsx` 的音乐播放器抽成 `site-music-player.tsx`；删除 `client/src/components/{button,icon,input,loading,padding}.tsx` 转发层，统一从 `@rin/ui` 引入。
 - **文档**: 更新 `AGENTS.md` 中过时的 `packages/ui` 描述，补齐 `deploy:server` / `deploy:client` 脚本与日语翻译缺失的 key。
 - **恢复结果回包**: 恢复接口改为返回数据库回读的真实条数与提示（`counts` / `warnings` / `safetyBackup`），后台会把「还需手动处理」的事项直接提示给站长。
 

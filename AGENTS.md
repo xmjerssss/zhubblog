@@ -56,7 +56,7 @@ This repository is a product monorepo, not a framework monorepo.
 - `client/` is the web application, not a reusable package.
 - `server/` is the Worker application, not a generic framework core.
 - `packages/api/` is the only stable shared package today.
-- `packages/ui/` is a real workspace package (`@rin/ui`) with its own manifest and exports, and it is consumed by `client/`. Some primitives (button/input/loading/padding/icon) still have duplicate copies under `client/src/components` — prefer `@rin/ui` for new app-agnostic primitives and migrate the duplicates when touching them.
+- `packages/ui/` is a real workspace package (`@rin/ui`) with its own manifest and exports, and it is consumed by `client/`. App-agnostic primitives (`Button`, `Input`, `Checkbox`, `Waiting`, `Padding`, `Icon`, `Modal`, …) live **only** there — the old `client/src/components/{button,input,loading,padding,icon}.tsx` re-export shims are gone, so import them from `@rin/ui` directly. `client/src/components/` is for app-specific composition (markdown, feed cards, header/footer, dialogs).
 - `cli/` is an engineering tool for this repo, not a runtime dependency of the product.
 
 ### Refactor Direction
@@ -99,7 +99,7 @@ For any substantial restructure, agents should work in this order:
    - Add missing package manifests, tsconfig files, and explicit exports.
    - Introduce a root TypeScript base config before broad moves.
 2. Extract shared logic.
-   - Move truly shared UI into `packages/ui`.
+   - Move truly shared UI into `packages/ui` (and delete any `client/src/components` re-export shim instead of keeping both).
    - Move shared config models and parsing into a dedicated shared package.
    - Keep app-specific composition in the app layer.
 3. Simplify application entrypoints.

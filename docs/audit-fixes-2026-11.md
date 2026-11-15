@@ -95,11 +95,25 @@
 
 > 沙箱内 `bun install` 不可用（大量 ConnectionClosed），验证在 `/tmp/verify` 里用 pnpm + `node-linker=hoisted` 完成，源码每次从本仓库同步；仓库本身不引入 pnpm 文件。
 
-## 七、还没做的（已知遗留，非阻塞）
+## 七、第二轮：把遗留清单清掉
 
-- 约 28 处 `console.log` 仍散落在 server/client 里，未统一收口到日志工具。
-- `comments.approved` 字段目前恒为 1，评论审核开关没有真正接线。
-- `client/index.html` 的 meta / 预连接等细节未整理。
-- `settings.tsx`（1634 行）、`backup.ts`（1251 行）、`footer.tsx` 仍偏大，未拆分。
-- `client/src/components` 与 `packages/ui` 职责仍重叠，未收敛。
-- README 尚未与新的 `deploy:*` 脚本逐字对齐。
+| 遗留项 | 处理结果 |
+| --- | --- |
+| 28 处 `console.log` | 新增 `server/src/utils/logger.ts`（`debugLog` / `logInfo` / `logWarn` / `logError`），热路径日志默认静默，`LOG_DEBUG=1` 时才输出；`fetch` / `scheduled` / `queue` 三个入口统一 `configureLogging(env)` |
+| `comments.approved` 一直是 1 | 完整接线：`comment.require_approval` 开关（默认关）→ 非管理员的评论入待审核；列表对游客过滤未审核、管理员可见；新增 `GET /comment/pending` 与 `PATCH /comment/:id/approve`；后台设置页新增开关与审核列表（通过 / 删除）；前台提交后提示「等待审核」 |
+| `client/index.html` | 补 `<title>` / description / theme-color / color-scheme，注释说明 `no-referrer` 的取舍；**移除硬编码的上游 Umami 统计 ID**（改成 `VITE_UMAMI_WEBSITE_ID` 才加载，否则所有 fork 的访客数据都会进上游账号） |
+| `backup.ts` 1251 行 | 拆成 `backup-core.ts`（452 行，纯逻辑：快照/恢复校验/云端写入/自动备份/密钥体检）+ `backup.ts`（836 行，只留路由），旧导入路径继续可用 |
+| `footer.tsx` 784 行 | 背景音乐（APlayer 加载、歌单拉取、错误跳过）抽成 `components/site-music-player.tsx` 的 `useSiteMusicPlayer()`，footer 降到 ~660 行 |
+| `components` vs `packages/ui` 重叠 | 删掉 5 个只做转发的 shim（`button/icon/input/loading/padding`），全仓 25 处导入改为直接引 `@rin/ui`；`AGENTS.md` 明确「通用原语只放 `packages/ui`，`client/src/components` 只放应用级组合」 |
+| README 与 `deploy:*` 不一致 | 修正工作流清单（`ci.yml` 已删、`build/clean/release/docs` 补齐），新增「Backup and Disaster Recovery」小节与双语文档链接 |
+| 语言标记 | `<html lang>` 跟随 i18n 实际语言，读屏软件与搜索引擎不再被固定 `en` 误导 |
+
+剩下一项：`settings.tsx`（~1680 行）仍未拆分。备份/恢复那一大块状态与弹窗高度耦合，短期内强拆反而有回归风险，因此保留，作为后续单独任务。
+
+## 八、第二轮验证
+
+| 检查 | 结果 |
+| --- | --- |
+| `bun test` 整仓 | **496 pass / 0 fail**（54 个文件，新增 4 个评论审核用例） |
+| `tsc --noEmit`（server / client） | 均 0 错误 |
+| `vite build`（client） | 成功 |

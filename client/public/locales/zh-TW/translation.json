@@ -104,7 +104,8 @@
     "guest_name_required": "暱稱不能為空",
     "guest_name_placeholder": "暱稱（必填）",
     "guest_email_placeholder": "郵箱（可選）",
-    "guest_website_placeholder": "網站（可選）"
+    "guest_website_placeholder": "網站（可選）",
+    "pending": "留言已送出，待站長審核後顯示"
   },
   "comparison": "比較",
   "confirm": "確認",
@@ -300,6 +301,19 @@
       "enable": {
         "desc": "開啟/關閉文章底部留言入口與留言區",
         "title": "啟用留言"
+      },
+      "approval": {
+        "title": "留言需要審核",
+        "desc": "開啟後新留言先進入待審核清單，通過後才對所有人可見（站長自己的留言直接通過）"
+      },
+      "moderation": {
+        "title": "待審核留言",
+        "refresh": "重新整理",
+        "empty": "目前沒有待審核留言",
+        "approve": "通過",
+        "delete": "刪除",
+        "load_failed$message": "取得待審核留言失敗，{{message}}",
+        "action_failed$message": "操作失敗，{{message}}"
       }
     },
     "counter": {

@@ -1,7 +1,7 @@
 import { Modal } from "@rin/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Button, ButtonWithLoading } from "./button";
+import { Button, ButtonWithLoading } from "@rin/ui";
 
 export type Confirm = {
     title: string;

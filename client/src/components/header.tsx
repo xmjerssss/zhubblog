@@ -1,6 +1,6 @@
 import { useContext, useEffect, useRef, useState } from "react";
 import { ProfileContext } from "../state/profile";
-import { Padding } from "./padding";
+import { Padding } from "@rin/ui";
 import { useSiteConfig } from "../hooks/useSiteConfig";
 import { getHeaderLayoutDefinition } from "./site-header/layout-registry";
 import { normalizeHeaderBehavior, normalizeHeaderLayout } from "./site-header/layout-options";

@@ -5,7 +5,7 @@ import {Helmet} from "react-helmet";
 import {useTranslation} from "react-i18next";
 import Loading from 'react-loading';
 import {ShowAlertType, useAlert} from '../components/dialog';
-import {Checkbox, Input} from "../components/input";
+import { Checkbox, Input } from "@rin/ui";
 import { DateTimeInput, FlatMetaRow, FlatPanel } from "@rin/ui";
 import { client } from "../app/runtime";
 import {Cache} from '../utils/cache';

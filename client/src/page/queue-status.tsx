@@ -4,7 +4,7 @@ import { Helmet } from "react-helmet";
 import { useTranslation } from "react-i18next";
 import type { QueueStatusItem, QueueStatusResponse } from "../api/client";
 import { client } from "../app/runtime";
-import { Button } from "../components/button";
+import { Button } from "@rin/ui";
 import { useAlert, useConfirm } from "../components/dialog";
 import { useApiResource } from "../hooks/use-api-resource";
 import { useSiteConfig } from "../hooks/useSiteConfig";

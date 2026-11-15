@@ -2,7 +2,7 @@ import * as Switch from "@radix-ui/react-switch";
 import { type ChangeEvent, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import ReactLoading from "react-loading";
-import { Button } from "../components/button";
+import { Button } from "@rin/ui";
 import { useConfirm } from "../components/dialog";
 import { ImageUploadInput } from "../components/image-upload-input";
 import { ImageWithFallback } from "../components/image-with-fallback";

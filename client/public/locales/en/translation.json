@@ -104,7 +104,8 @@
     "guest_name_required": "Guest name is required",
     "guest_name_placeholder": "Name (required)",
     "guest_email_placeholder": "Email (optional)",
-    "guest_website_placeholder": "Website (optional)"
+    "guest_website_placeholder": "Website (optional)",
+    "pending": "Comment submitted and waiting for approval"
   },
   "comparison": "Comparison",
   "confirm": "Confirm",
@@ -300,6 +301,19 @@
       "enable": {
         "desc": "Open/close the comment entry and comment area at the bottom of the article",
         "title": "Enable Comments"
+      },
+      "approval": {
+        "title": "Require comment approval",
+        "desc": "New comments stay in the moderation list until approved; comments by the site owner skip moderation"
+      },
+      "moderation": {
+        "title": "Pending comments",
+        "refresh": "Refresh",
+        "empty": "No comments waiting for approval",
+        "approve": "Approve",
+        "delete": "Delete",
+        "load_failed$message": "Failed to load pending comments, {{message}}",
+        "action_failed$message": "Action failed, {{message}}"
       }
     },
     "counter": {

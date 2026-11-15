@@ -18,6 +18,7 @@ import type {
   Tag,
   TagDetail,
   Comment,
+  PendingComment,
   CreateCommentRequest,
   Friend,
   FriendListResponse,
@@ -437,6 +438,16 @@ class CommentAPI {
 
   async delete(id: number): Promise<ApiResponse<void>> {
     return this.http.delete<void>(`/api/comment/${id}`);
+  }
+
+  /** 待审核评论（管理员） */
+  async pending(): Promise<ApiResponse<PendingComment[]>> {
+    return this.http.get<PendingComment[]>("/api/comment/pending");
+  }
+
+  /** 审核通过（管理员） */
+  async approve(id: number): Promise<ApiResponse<void>> {
+    return this.http.patch<void>(`/api/comment/${id}/approve`);
   }
 }
 
