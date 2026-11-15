@@ -10,7 +10,14 @@ import {
     InternalServerError,
     RateLimitError,
 } from "../errors";
-import { hashPassword, needsRehash, timingSafeEqualString, verifyPassword } from "../utils/password";
+import { runInBackground } from "../utils/background";
+import {
+    hashPassword,
+    needsRehash,
+    resolveIterations,
+    timingSafeEqualString,
+    verifyPassword,
+} from "../utils/password";
 import { checkRateLimit, resetRateLimit } from "../utils/rate-limit";
 import { clientIp } from "../utils/request";
 
@@ -42,6 +49,9 @@ export function PasswordAuthService(): Hono<{
         if (!adminUsername || !adminPassword) {
             throw new BadRequestError('Admin credentials not configured');
         }
+
+        // 迭代次数可配置；默认值按 Workers 免费计划的 CPU 预算选取，见 utils/password.ts
+        const iterations = resolveIterations(env);
 
         const { username, password } = await profileAsync(c, 'auth_login_parse', () => c.req.json()) as { username: string; password: string };
 
@@ -106,7 +116,7 @@ export function PasswordAuthService(): Hono<{
             }));
 
             if (!user) {
-                const passwordHash = await profileAsync(c, 'auth_admin_hash', () => hashPassword(adminPassword));
+                const passwordHash = await profileAsync(c, 'auth_admin_hash', () => hashPassword(adminPassword, iterations));
                 const result = await profileAsync(c, 'auth_admin_insert', () => db.insert(users).values({
                     username: adminUsername,
                     openid: "admin",
@@ -122,12 +132,26 @@ export function PasswordAuthService(): Hono<{
                 user = await profileAsync(c, 'auth_admin_reload', () => db.query.users.findFirst({
                     where: eq(users.id, result[0].insertedId)
                 }));
-            } else if (user.username !== adminUsername || needsRehash(user.password)) {
-                // 用户名或哈希算法变更后同步一次
-                const passwordHash = await profileAsync(c, 'auth_admin_hash', () => hashPassword(adminPassword));
-                await profileAsync(c, 'auth_admin_sync', () => db.update(users)
-                    .set({ password: passwordHash, username: adminUsername })
-                    .where(eq(users.id, user!.id)));
+            } else {
+                const adminUserId = user.id;
+
+                if (user.username !== adminUsername) {
+                    await profileAsync(c, 'auth_admin_sync_username', () => db.update(users)
+                        .set({ username: adminUsername })
+                        .where(eq(users.id, adminUserId)));
+                    user.username = adminUsername;
+                }
+
+                // 哈希重算放到响应之后：登录请求本身只付一次验签成本，
+                // 否则「验证 + 重算」两次 PBKDF2 很容易顶到 CPU 限额。
+                if (needsRehash(user.password, iterations)) {
+                    await runInBackground(c, async () => {
+                        const passwordHash = await hashPassword(adminPassword, iterations);
+                        await db.update(users)
+                            .set({ password: passwordHash })
+                            .where(eq(users.id, adminUserId));
+                    });
+                }
             }
 
             if (!user) {
@@ -152,12 +176,16 @@ export function PasswordAuthService(): Hono<{
             throw new ForbiddenError('Invalid credentials');
         }
 
-        // 旧版单轮 SHA-256 哈希在登录成功后自动升级为 PBKDF2。
-        if (needsRehash(user.password)) {
-            const passwordHash = await profileAsync(c, 'auth_user_rehash', () => hashPassword(password));
-            await profileAsync(c, 'auth_user_rehash_save', () => db.update(users)
-                .set({ password: passwordHash })
-                .where(eq(users.id, user.id)));
+        // 旧版单轮 SHA-256 哈希（或迭代次数已变化）在登录成功后按当前配置重算，
+        // 同样放到响应之后，避免登录请求承担两次 PBKDF2 的 CPU。
+        if (needsRehash(user.password, iterations)) {
+            const userId = user.id;
+            await runInBackground(c, async () => {
+                const passwordHash = await hashPassword(password, iterations);
+                await db.update(users)
+                    .set({ password: passwordHash })
+                    .where(eq(users.id, userId));
+            });
         }
 
         return issueSession(user);

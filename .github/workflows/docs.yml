@@ -35,6 +35,10 @@ jobs:
         
       - name: Setup Pages
         uses: actions/configure-pages@v5
+        with:
+          # 仓库尚未启用 Pages 时自动启用，否则首次部署会以
+          # "Get Pages site failed / Not Found" 失败。
+          enablement: true
         
       - name: Install dependencies
         working-directory: ./docs

@@ -5,7 +5,17 @@
 // 历史格式（旧版本写入 users.password 的值）：
 //   <sha256 hex(64 位)>
 
-const PBKDF2_ITERATIONS = 150_000;
+/**
+ * 默认迭代次数。
+ *
+ * Cloudflare Workers 免费计划每个请求只有 10ms CPU 预算，而 PBKDF2 是纯 CPU 计算：
+ * 150k 迭代实测就要 30ms 以上，登录请求会直接以 `error code: 1102`（超出 CPU 时间）
+ * 失败——表现就是「密码是对的，但登录不上」。所以默认值取一个在免费计划里也能
+ * 正常完成登录的量级，需要更强时可以调 `PASSWORD_HASH_ITERATIONS`（付费计划放宽）。
+ */
+export const DEFAULT_ITERATIONS = 10_000;
+/** 超过这个量级就有很高的撞 CPU 限额风险，仅用于告警提示 */
+export const SAFE_ITERATIONS_CEILING = 50_000;
 const SALT_BYTES = 16;
 const KEY_BYTES = 32;
 const PREFIX = 'pbkdf2';
@@ -64,20 +74,51 @@ async function derive(
     return new Uint8Array(bits);
 }
 
+/** 读取环境变量里的迭代次数配置，非法值回落到默认值。 */
+export function resolveIterations(env?: { PASSWORD_HASH_ITERATIONS?: string } | null): number {
+    const raw = env?.PASSWORD_HASH_ITERATIONS;
+    if (raw === undefined || raw === null || String(raw).trim() === '') {
+        return DEFAULT_ITERATIONS;
+    }
+
+    const parsed = Number.parseInt(String(raw).trim(), 10);
+    if (!Number.isFinite(parsed) || parsed < 1_000) {
+        return DEFAULT_ITERATIONS;
+    }
+    // 上界只是防御性限制，避免误配成天文数字后完全无法登录
+    return Math.min(parsed, 1_000_000);
+}
+
+/** 从哈希串里读出迭代次数；格式不对时返回 0。 */
+export function iterationsOf(stored: string | null | undefined): number {
+    if (!stored || !stored.startsWith(`${PREFIX}$`)) return 0;
+    const parts = stored.split('$');
+    if (parts.length !== 4) return 0;
+    const iterations = Number.parseInt(parts[1], 10);
+    return Number.isFinite(iterations) ? iterations : 0;
+}
+
 /** 生成新的密码哈希（每次调用都会使用新的随机盐）。 */
 export async function hashPassword(
     password: string,
-    iterations: number = PBKDF2_ITERATIONS,
+    iterations: number = DEFAULT_ITERATIONS,
 ): Promise<string> {
     const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
     const derived = await derive(password, salt, iterations);
     return `${PREFIX}$${iterations}$${toBase64(salt)}$${toBase64(derived)}`;
 }
 
-/** 判断存储的哈希是否仍是旧格式（单轮 SHA-256），用于登录时自动升级。 */
-export function needsRehash(stored: string | null | undefined): boolean {
+/**
+ * 判断存储的哈希是否需要按当前配置重算：旧格式（单轮 SHA-256）或迭代次数与
+ * 目标值不一致都要重算（升配、降配都能自动收敛到当前配置）。
+ */
+export function needsRehash(
+    stored: string | null | undefined,
+    targetIterations: number = DEFAULT_ITERATIONS,
+): boolean {
     if (!stored) return false;
-    return !stored.startsWith(`${PREFIX}$`);
+    if (!stored.startsWith(`${PREFIX}$`)) return true;
+    return iterationsOf(stored) !== targetIterations;
 }
 
 /** 校验密码，同时支持 PBKDF2 与历史 SHA-256 格式。 */
