@@ -30,6 +30,7 @@ import {
     loadOperator,
     putCloudBackup,
     type StoredGitHubConfig,
+    truncationWarnings,
     writeSafetySnapshot,
 } from "./backup-core";
 
@@ -383,7 +384,7 @@ export function BackupService(): Hono {
             const safetyKey = await writeSafetySnapshot(target, db);
             const operator = await loadOperator(db, c.get("uid"));
             const { counts, operatorRecreated } = await executeRestore(db, cacheManager, payload, operator);
-            const warnings = await collectSecretWarnings(env, db, serverConfig);
+            const warnings = [...truncationWarnings(payload), ...await collectSecretWarnings(env, db, serverConfig)];
             if (operatorRecreated) {
                 warnings.push("备份里的管理员不是你当前的登录账号，已把你的账号一并设为管理员，请用当前账号继续登录。");
             }
@@ -436,7 +437,7 @@ export function BackupService(): Hono {
 
             const operator = await loadOperator(db, c.get("uid"));
             const { counts, operatorRecreated } = await executeRestore(db, cacheManager, payload, operator);
-            const warnings = await collectSecretWarnings(env, db, serverConfig);
+            const warnings = [...truncationWarnings(payload), ...await collectSecretWarnings(env, db, serverConfig)];
             if (operatorRecreated) {
                 warnings.push("备份里的管理员不是你当前的登录账号，已把你的账号一并设为管理员，请用当前账号继续登录。");
             }
@@ -807,7 +808,7 @@ export function BackupService(): Hono {
             const payload: any = await res.json();
             const operator = await loadOperator(db, c.get("uid"));
             const { counts, operatorRecreated } = await executeRestore(db, cacheManager, payload, operator);
-            const warnings = await collectSecretWarnings(env, db, serverConfig);
+            const warnings = [...truncationWarnings(payload), ...await collectSecretWarnings(env, db, serverConfig)];
             if (operatorRecreated) {
                 warnings.push("备份里的管理员不是你当前的登录账号，已把你的账号一并设为管理员，请用当前账号继续登录。");
             }

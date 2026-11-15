@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray, sql } from "drizzle-orm";
 import {
     cache,
     comments,
@@ -21,6 +21,13 @@ import { decryptSecret } from "../utils/storage-secrets";
 // 这里不依赖 Hono，路由在 backup.ts，方便单测直接调用。
 
 export const BACKUP_SCHEMA_VERSION = 1;
+/**
+ * 单次快照最多带多少条访问明细。
+ * `visits` 是「每次浏览一行」，热门站点动辄上百万行；全量塞进 JSON 会让
+ * 备份文件暴涨、把 Worker 内存打满。PV/UV 汇总（visit_stats）始终完整备份，
+ * 这里只对明细做时间倒序截断，并在 metadata / 恢复提示里说明。
+ */
+export const MAX_SNAPSHOT_VISITS = 20000;
 export const MAX_CLOUD_BACKUPS = 3;
 export const BACKUP_DIR_NAME = "backups";
 export const CLOUD_BACKUPS_CACHE_KEY = "cloud_backups_list";
@@ -147,6 +154,9 @@ export function cleanBackupObjectKey(rawKey: string, bucketName?: string, storag
 
 // 构建完整数据快照
 export async function createSnapshot(db: any) {
+    const [totalVisitRows] = await db.select({ count: sql<number>`count(*)` }).from(visits);
+    const totalVisits = Number(totalVisitRows?.count ?? 0);
+
     const [
         userRows,
         feedRows,
@@ -172,10 +182,11 @@ export async function createSnapshot(db: any) {
         db.select().from(storages),
         db.select().from(storageFiles),
         db.select().from(visitStats),
-        db.select().from(visits),
+        db.select().from(visits).orderBy(desc(visits.createdAt)).limit(MAX_SNAPSHOT_VISITS),
     ]);
 
     const totalMediaBytes = storageFileRows.reduce((acc: number, f: any) => acc + (f.size || 0), 0);
+    const skippedVisits = Math.max(0, totalVisits - visitRows.length);
 
     return {
         version: BACKUP_SCHEMA_VERSION,
@@ -190,7 +201,12 @@ export async function createSnapshot(db: any) {
                 hashtags: hashtagRows.length,
                 storages: storageRows.length,
                 mediaFiles: storageFileRows.length,
+                visits: visitRows.length,
+                visitsTotal: totalVisits,
             },
+            truncated: skippedVisits > 0
+                ? { visits: skippedVisits, reason: `访问明细只备份最近 ${MAX_SNAPSHOT_VISITS} 条` }
+                : undefined,
             mediaSummary: {
                 totalFiles: storageFileRows.length,
                 totalBytes: totalMediaBytes,
@@ -372,28 +388,49 @@ export function assertValidSnapshot(payload: any): void {
 
 /** 恢复完成后回读数据库，返回真实的数据量（而不是照抄备份文件里的元数据）。 */
 export async function countRows(db: any) {
-    const [feedRows, commentRows, momentRows, friendRows, storageRows, storageFileRows, userRows, visitRows] =
+    const countOf = async (table: any) => {
+        const [row] = await db.select({ count: sql<number>`count(*)` }).from(table);
+        return Number(row?.count ?? 0);
+    };
+
+    const [feedsCount, commentsCount, momentsCount, friendsCount, storagesCount, mediaFilesCount, usersCount, visitsCount] =
         await Promise.all([
-            db.select().from(feeds),
-            db.select().from(comments),
-            db.select().from(moments),
-            db.select().from(friends),
-            db.select().from(storages),
-            db.select().from(storageFiles),
-            db.select().from(users),
-            db.select().from(visits),
+            countOf(feeds),
+            countOf(comments),
+            countOf(moments),
+            countOf(friends),
+            countOf(storages),
+            countOf(storageFiles),
+            countOf(users),
+            countOf(visits),
         ]);
 
     return {
-        feeds: feedRows.length,
-        comments: commentRows.length,
-        moments: momentRows.length,
-        friends: friendRows.length,
-        storages: storageRows.length,
-        mediaFiles: storageFileRows.length,
-        users: userRows.length,
-        visits: visitRows.length,
+        feeds: feedsCount,
+        comments: commentsCount,
+        moments: momentsCount,
+        friends: friendsCount,
+        storages: storagesCount,
+        mediaFiles: mediaFilesCount,
+        users: usersCount,
+        visits: visitsCount,
     };
+}
+
+/** 备份文件本身有截断时，恢复后要明确告诉站长少的是什么。 */
+export function truncationWarnings(payload: any): string[] {
+    const truncated = payload?.metadata?.truncated;
+    if (!truncated || typeof truncated !== "object") return [];
+
+    const warnings: string[] = [];
+    const visits = Number(truncated.visits ?? 0);
+    if (visits > 0) {
+        warnings.push(
+            `这次备份只带了最近的访问明细，有 ${visits} 条更早的明细没有进备份；` +
+            `文章 PV/UV 汇总数据是完整的，不受影响。`,
+        );
+    }
+    return warnings;
 }
 
 /**

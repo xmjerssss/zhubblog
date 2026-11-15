@@ -13,13 +13,23 @@ describe("BackupService", () => {
     let ctx: TestContext;
     let sqlite: Database;
 
+    const originalFetch = globalThis.fetch;
+
     beforeEach(async () => {
         ctx = await setupTestApp(BackupService);
         sqlite = ctx.sqlite;
         seed(sqlite);
+
+        // 恢复前会往存储桶写兜底快照，这里用假对象存储避免真的发请求
+        globalThis.fetch = (async (input: any, init?: any) => {
+            const request = input instanceof Request ? input : new Request(input, init);
+            if (!request.url.includes("cloudflarestorage")) return originalFetch(input, init);
+            return new Response(request.method === "GET" ? null : null, { status: 200 });
+        }) as typeof fetch;
     });
 
     afterEach(() => {
+        globalThis.fetch = originalFetch;
         cleanupTestDB(sqlite);
     });
 
@@ -154,6 +164,35 @@ describe("BackupService", () => {
 
         const body = await res.json() as any;
         expect(body.counts.visits).toBe(2);
+    });
+
+    it("caps visit details in the snapshot instead of dumping millions of rows", async () => {
+        // 模拟一个被刷了很多次的站点：2 万多条访问明细
+        sqlite.exec(`
+            INSERT INTO visits (feed_id, ip, created_at)
+            WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 20050)
+            SELECT 1, 'h' || n, 1700000000 + n FROM seq
+        `);
+
+        const payload = await exportBackup();
+
+        expect(payload.data.visits).toHaveLength(20000);
+        expect(payload.metadata.counts.visitsTotal).toBe(20050);
+        expect(payload.metadata.truncated.visits).toBe(50);
+        // 保留的是最新的 2 万条（最旧那条被丢掉）
+        const timestamps = payload.data.visits.map((row: any) => new Date(row.createdAt).getTime() / 1000);
+        expect(Math.max(...timestamps)).toBe(1700020050);
+        expect(Math.min(...timestamps)).toBe(1700000051);
+    });
+
+    it("warns about truncated visit details after restoring", async () => {
+        const payload = await exportBackup();
+        payload.metadata.truncated = { visits: 1234 };
+
+        const res = await importBackup(payload);
+        const body = await res.json() as any;
+
+        expect(body.warnings.join("\n")).toContain("1234");
     });
 
     it("returns counts read back from the database", async () => {

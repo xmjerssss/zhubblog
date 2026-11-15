@@ -17,7 +17,7 @@ Each backup is a single JSON file written by `POST /api/backup/export-to-storage
 | Site config (name, theme, comment switches, announcement…) | ✅ | Site looks the same after restore |
 | Users (site owner, GitHub `openid`, password hash) | ✅ | PBKDF2 hashes are portable, password login keeps working |
 | Custom storage config + file index | ✅ | The index is backed up; **the files themselves never left the bucket** |
-| Visit stats and details (`visit_stats` / `visits`) | ✅ | IPs are stored hashed |
+| Visit stats and details (`visit_stats` / `visits`) | ✅ | IPs are stored hashed; only the latest 20k detail rows are included, PV/UV totals are complete |
 | Environment variables (`JWT_SECRET`, `S3_*`, `RIN_GITHUB_CLIENT_*`, domain) | ❌ | Not data — reconfigure in the new account |
 | SecretKey of custom storages, GitHub backup token | ⚠️ | Backed up but encrypted with the old master key; re-enter after switching accounts |
 
@@ -91,7 +91,7 @@ Yes, so a `backups/pre-restore.json` snapshot is written first; restore that fil
 Then only a GitHub backup (if configured) or a locally exported JSON can help. **Backups must exist before the disaster** — which is why automatic daily backups are on by default.
 
 **Q: Why are fewer `visits` rows present than before?**
-`visits` is replaced wholesale by the snapshot; visits recorded after the snapshot is gone. That is the correct behaviour for "restore to the state at backup time".
+Two expected reasons: visits recorded after the snapshot is gone, and the snapshot keeps only the latest 20k detail rows (busy sites have millions, which would bloat the JSON and slow restores). PV/UV totals are always complete, and the restore report tells you how many rows were skipped.
 
 ---
 
