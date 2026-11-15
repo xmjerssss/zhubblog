@@ -6,6 +6,20 @@ import { profileAsync } from "../core/server-timing";
 import { notify } from "../utils/webhook";
 import { resolveWebhookConfig } from "./config-helpers";
 
+const COMMENT_MAX_LENGTH = 5000;
+const GUEST_NAME_MAX_LENGTH = 50;
+const GUEST_EMAIL_MAX_LENGTH = 254;
+const GUEST_WEBSITE_MAX_LENGTH = 2048;
+
+function isHttpUrl(value: string): boolean {
+    try {
+        const url = new URL(value);
+        return url.protocol === 'http:' || url.protocol === 'https:';
+    } catch {
+        return false;
+    }
+}
+
 export function CommentService(): Hono {
     const app = new Hono();
 
@@ -24,16 +38,16 @@ export function CommentService(): Hono {
             orderBy: [desc(comments.createdAt)]
         }));
         
+        // 公开接口不返回游客邮箱：前端只用 guestName，邮箱属于隐私数据。
         const result = comment_list.map((c: any) => {
-            if (c.user) {
-                return c;
+            const { guestEmail: _guestEmail, ...rest } = c;
+            if (rest.user) {
+                return rest;
             }
-            const { user, ...rest } = c;
             return {
                 ...rest,
                 user: null,
                 guestName: rest.guestName || "",
-                guestEmail: rest.guestEmail || "",
                 guestWebsite: rest.guestWebsite || "",
             };
         });
@@ -47,11 +61,37 @@ export function CommentService(): Hono {
         const serverConfig = c.get('serverConfig');
         const uid = c.get('uid');
         const feedId = parseInt(c.req.param('feed'));
-        const body = await profileAsync(c, 'comment_create_parse', () => c.req.json());
-        const { content, guestName, guestEmail, guestWebsite } = body;
-        
+        const body = await profileAsync(c, 'comment_create_parse', () => c.req.json()) as {
+            content?: unknown;
+            guestName?: unknown;
+            guestEmail?: unknown;
+            guestWebsite?: unknown;
+        } | null;
+
+        const content = typeof body?.content === 'string' ? body.content.trim() : '';
+        const guestName = typeof body?.guestName === 'string' ? body.guestName.trim() : '';
+        const guestEmail = typeof body?.guestEmail === 'string' ? body.guestEmail.trim() : '';
+        const guestWebsite = typeof body?.guestWebsite === 'string' ? body.guestWebsite.trim() : '';
+
         if (!content) {
             return c.text('Content is required', 400);
+        }
+
+        // 输入长度上限，避免超长内容撑爆数据库 / 通知渠道
+        if (content.length > COMMENT_MAX_LENGTH) {
+            return c.text(`Content is too long (max ${COMMENT_MAX_LENGTH} characters)`, 400);
+        }
+        if (guestName.length > GUEST_NAME_MAX_LENGTH) {
+            return c.text(`Guest name is too long (max ${GUEST_NAME_MAX_LENGTH} characters)`, 400);
+        }
+        if (guestEmail.length > GUEST_EMAIL_MAX_LENGTH) {
+            return c.text('Guest email is too long', 400);
+        }
+        if (guestWebsite && !isHttpUrl(guestWebsite)) {
+            return c.text('Guest website must be a valid http(s) URL', 400);
+        }
+        if (guestWebsite.length > GUEST_WEBSITE_MAX_LENGTH) {
+            return c.text('Guest website is too long', 400);
         }
         
         const exist = await profileAsync(c, 'comment_create_feed', () => db.query.feeds.findFirst({ where: eq(feeds.id, feedId) }));
@@ -105,7 +145,7 @@ export function CommentService(): Hono {
         }
 
         // 游客评论
-        if (!guestName || !guestName.trim()) {
+        if (!guestName) {
             return c.text('Guest name is required', 400);
         }
 
@@ -113,9 +153,9 @@ export function CommentService(): Hono {
             feedId,
             userId: null,
             content,
-            guestName: guestName.trim(),
-            guestEmail: guestEmail?.trim() || "",
-            guestWebsite: guestWebsite?.trim() || "",
+            guestName,
+            guestEmail,
+            guestWebsite,
             approved: 1,
         });
 

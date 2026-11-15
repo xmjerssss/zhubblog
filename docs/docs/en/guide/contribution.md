@@ -96,7 +96,6 @@ bun run test
 bun run check
 
 # Run formatting check
-bun run format:check
 ```
 
 ### Adding Tests for New Features

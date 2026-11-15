@@ -95,7 +95,6 @@ bun run test
 bun run check
 
 # 运行格式化检查
-bun run format:check
 ```
 
 ### 为新功能添加测试

@@ -8,7 +8,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "check": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "^1.1.2",

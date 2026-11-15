@@ -10,6 +10,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import gfm from "remark-gfm";
 import remarkMermaid from "../remark/remarkMermaid";
+import rehypeSafeHtml from "../remark/rehypeSafeHtml";
 import { remarkAlert } from "remark-github-blockquote-alert";
 import remarkMath from "remark-math";
 import remarkBreaks from "remark-breaks";
@@ -146,7 +147,7 @@ export function Markdown({ content }: { content: string }) {
       className="toc-content min-w-0 dark:text-neutral-300 [overflow-wrap:anywhere]"
       remarkPlugins={[gfm, remarkMermaid, remarkMath, remarkAlert, remarkBreaks]}
       children={normalizedContent}
-      rehypePlugins={[rehypeKatex, rehypeRaw]}
+      rehypePlugins={[rehypeKatex, rehypeRaw, rehypeSafeHtml]}
       components={{
         img({ node, src, ...props }) {
           const offset = node!.position!.start.offset!;

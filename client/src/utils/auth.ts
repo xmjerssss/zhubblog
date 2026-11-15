@@ -1,52 +1,14 @@
-const TOKEN_KEY = 'rin_auth_token';
+// 登录态完全由服务端下发的 HttpOnly cookie 承载，前端不再保存任何 token。
+// 这里只负责清理旧版本遗留在 localStorage 里的 `rin_auth_token`。
 
-// In-memory fallback for environments without localStorage (e.g., tests)
-let memoryToken: string | null = null;
+const LEGACY_TOKEN_KEY = 'rin_auth_token';
 
-function isLocalStorageAvailable(): boolean {
+export function clearLegacyAuthToken(): void {
     try {
-        if (typeof localStorage === 'undefined') {
-            return false;
+        if (typeof localStorage !== 'undefined') {
+            localStorage.removeItem(LEGACY_TOKEN_KEY);
         }
-        // Test localStorage
-        localStorage.setItem('__test__', 'test');
-        localStorage.removeItem('__test__');
-        return true;
     } catch {
-        return false;
+        // 隐私模式下 localStorage 可能不可用，忽略即可
     }
-}
-
-export function getAuthToken(): string | null {
-    if (isLocalStorageAvailable()) {
-        return localStorage.getItem(TOKEN_KEY);
-    }
-    return memoryToken;
-}
-
-export function setAuthToken(token: string): void {
-    if (isLocalStorageAvailable()) {
-        localStorage.setItem(TOKEN_KEY, token);
-    } else {
-        memoryToken = token;
-    }
-}
-
-export function removeAuthToken(): void {
-    if (isLocalStorageAvailable()) {
-        localStorage.removeItem(TOKEN_KEY);
-    } else {
-        memoryToken = null;
-    }
-}
-
-export function headersWithAuth(): Record<string, string> {
-    const headers: Record<string, string> = {};
-    
-    const token = getAuthToken();
-    if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-    }
-    
-    return headers;
 }

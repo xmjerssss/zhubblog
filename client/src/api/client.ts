@@ -1,7 +1,6 @@
 // API Client for Rin - Type-safe HTTP client to replace Eden
 // This client provides a clean, type-safe interface for all backend API endpoints
 
-import { getAuthToken } from "../utils/auth";
 import { endpoint } from "../config";
 
 // Import shared types
@@ -188,7 +187,12 @@ export interface BackupRestoreResponse {
   ok: boolean;
   message?: string;
   error?: string;
+  hint?: string;
   counts?: any;
+  /** 恢复前自动写入存储桶的兜底快照路径 */
+  safetyBackup?: string | null;
+  /** 换账号恢复时可能出现的问题（密钥解不开等） */
+  warnings?: string[];
 }
 
 // GitHub 备份配置与列表类型
@@ -271,11 +275,6 @@ class HttpClient {
       Accept: "application/json",
       ...options?.headers,
     };
-
-    const token = getAuthToken();
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
 
     if (body !== undefined && !(body instanceof FormData)) {
       headers["Content-Type"] = "application/json";
@@ -736,9 +735,7 @@ class BackupAPI {
 
   // 2. 本地下载
   async download(): Promise<{ ok: boolean; error?: string; filename?: string }> {
-    const token = getAuthToken();
     const headers: Record<string, string> = {};
-    if (token) headers["Authorization"] = `Bearer ${token}`;
 
     try {
       const res = await fetch(`${endpoint}/api/backup/export`, {

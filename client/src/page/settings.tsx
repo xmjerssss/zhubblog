@@ -97,7 +97,7 @@ export function Settings() {
     error?: string;
   }>({ open: false, loading: false, items: [], target: "" });
 
-  const [manualCloudKey, setManualCloudKey] = useState("backups/rin-backup-2026-10-24T01-43-36.json");
+  const [manualCloudKey, setManualCloudKey] = useState("");
 
   // 3.1 GitHub 备份选择列表弹窗
   const [githubBackupsModal, setGithubBackupsModal] = useState<{
@@ -492,11 +492,16 @@ export function Settings() {
       }
 
       if (resError || !resData || !resData.ok) {
-        showAlert(`恢复失败: ${resError?.value || resData?.error || "写入异常"}`);
+        const reason = resError?.value || resData?.error || "写入异常";
+        const hint = resData?.hint ? `\n\n${resData.hint}` : "";
+        showAlert(`恢复失败: ${reason}${hint}`);
       } else {
         const counts = resData.counts || {};
+        const warnings: string[] = Array.isArray(resData.warnings) ? resData.warnings : [];
+        const warningText = warnings.length > 0 ? `\n\n⚠️ 还需要处理：\n${warnings.join("\n")}` : "";
+        const safetyText = resData.safetyBackup ? `\n\n恢复前的数据已备份到：${resData.safetyBackup}` : "";
         showAlert(
-          `🎉 全量数据恢复成功！\n成功还原: ${counts.feeds ?? 0} 篇文章、${counts.comments ?? 0} 条评论、${counts.moments ?? 0} 条动态、${counts.friends ?? 0} 个友链。\n点击确定将刷新页面。`,
+          `🎉 全量数据恢复成功！\n成功还原: ${counts.feeds ?? 0} 篇文章、${counts.comments ?? 0} 条评论、${counts.moments ?? 0} 条动态、${counts.friends ?? 0} 个友链。${warningText}${safetyText}\n\n点击确定将刷新页面。`,
           () => {
             window.location.reload();
           }

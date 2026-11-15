@@ -17,10 +17,6 @@ bun run check             # TypeScript type check (turbo)
 bun run db:generate       # Generate Drizzle migrations
 bun run db:migrate        # Run local database migrations
 
-# Formatting
-bun run format:check      # Check formatting
-bun run format:write      # Fix formatting
-
 # Deployment (using Rin CLI)
 bun run deploy            # Deploy both frontend (Pages) and backend (Workers)
 bun run deploy:server     # Deploy backend only
@@ -60,7 +56,7 @@ This repository is a product monorepo, not a framework monorepo.
 - `client/` is the web application, not a reusable package.
 - `server/` is the Worker application, not a generic framework core.
 - `packages/api/` is the only stable shared package today.
-- `packages/ui/` exists in the tree but is not yet a real workspace package; treat it as incomplete work until it has its own `package.json`, tsconfig, exports, and consumers.
+- `packages/ui/` is a real workspace package (`@rin/ui`) with its own manifest and exports, and it is consumed by `client/`. Some primitives (button/input/loading/padding/icon) still have duplicate copies under `client/src/components` — prefer `@rin/ui` for new app-agnostic primitives and migrate the duplicates when touching them.
 - `cli/` is an engineering tool for this repo, not a runtime dependency of the product.
 
 ### Refactor Direction

@@ -84,9 +84,10 @@ describe('CommentService', () => {
             const data = await res.json() as any;
             expect(data.length).toBeGreaterThan(0);
             
-            // Should not include feedId and userId (excluded in query)
+            // Should not include feedId, userId（查询时排除）与游客邮箱（隐私）
             expect(data[0]).not.toHaveProperty('feedId');
             expect(data[0]).not.toHaveProperty('userId');
+            expect(data[0]).not.toHaveProperty('guestEmail');
             
             // Should include user info
             expect(data[0].user).toHaveProperty('id');
@@ -145,6 +146,53 @@ describe('CommentService', () => {
             expect(row.guest_name).toBe('Visitor');
             expect(row.guest_email).toBe('visitor@example.com');
             expect(row.guest_website).toBe('https://example.com');
+        });
+
+        it('should reject overly long comment content', async () => {
+            const res = await app.request('/1', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: 'x'.repeat(5001), guestName: 'Guest' }),
+            }, env);
+
+            expect(res.status).toBe(400);
+            const text = await res.text();
+            expect(text).toContain('too long');
+        });
+
+        it('should reject non-http(s) guest website', async () => {
+            const res = await app.request('/1', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    content: 'hello',
+                    guestName: 'Guest',
+                    guestWebsite: 'javascript:alert(1)',
+                }),
+            }, env);
+
+            expect(res.status).toBe(400);
+            const text = await res.text();
+            expect(text).toContain('http(s)');
+        });
+
+        it('should not expose guest email in the comment list', async () => {
+            await app.request('/1', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    content: 'private email',
+                    guestName: 'EmailGuest',
+                    guestEmail: 'secret@example.com',
+                }),
+            }, env);
+
+            const res = await app.request('/1', { method: 'GET' }, env);
+            const data = await res.json() as any[];
+            const guest = data.find((comment) => comment.guestName === 'EmailGuest');
+
+            expect(guest).toBeDefined();
+            expect(guest).not.toHaveProperty('guestEmail');
         });
 
         it('should reject guest comment without guestName', async () => {

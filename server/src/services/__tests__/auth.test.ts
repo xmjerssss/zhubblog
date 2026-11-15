@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Hono } from "hono";
 import { PasswordAuthService } from "../auth";
+import { hashPassword as hashForTest } from "../../utils/password";
 import {
   createMockDB,
   createMockEnv,
@@ -237,6 +238,41 @@ describe("PasswordAuthService", () => {
       expect(errorData.error.message).toBe("Admin credentials not configured");
     });
 
+    it("should rate limit repeated failed logins", async () => {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const result = await api.auth.login({
+          username: "admin",
+          password: "wrongpassword",
+        });
+        expect(result.error?.status).toBe(403);
+      }
+
+      const blocked = await api.auth.login({
+        username: "admin",
+        password: "wrongpassword",
+      });
+
+      expect(blocked.error?.status).toBe(429);
+    });
+
+    it("should upgrade legacy sha256 password hashes on successful login", async () => {
+      const legacyHash = await legacySha256('legacypass');
+      sqlite.exec(`
+        INSERT INTO users (id, username, avatar, openid, password, permission)
+        VALUES (11, 'legacyuser', 'avatar.png', 'user_11', '${legacyHash}', 0)
+      `);
+
+      const result = await api.auth.login({
+        username: "legacyuser",
+        password: "legacypass",
+      });
+
+      expect(result.error).toBeUndefined();
+
+      const row = sqlite.prepare(`SELECT password FROM users WHERE id = 11`).get() as any;
+      expect(row.password.startsWith('pbkdf2$')).toBe(true);
+    });
+
     it("should reject user without password", async () => {
       // Create a user without password
       sqlite.exec(`
@@ -329,11 +365,16 @@ describe("PasswordAuthService", () => {
   });
 });
 
-// Hash password using SHA-256
-async function hashPassword(password: string): Promise<string> {
+// 旧版本使用的单轮 SHA-256 哈希（用于验证兼容与自动升级）
+async function legacySha256(password: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(password);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// 测试里插入普通用户时使用当前的 PBKDF2 哈希
+async function hashPassword(password: string): Promise<string> {
+  return hashForTest(password);
 }

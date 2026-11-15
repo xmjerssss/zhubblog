@@ -1,5 +1,5 @@
 import { relations, sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, unique, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 const created_at = integer("created_at", { mode: 'timestamp' }).default(sql`(unixepoch())`).notNull();
 const updated_at = integer("updated_at", { mode: 'timestamp' }).default(sql`(unixepoch())`).notNull();
@@ -90,7 +90,10 @@ export const users = sqliteTable("users", {
     createdAt: created_at,
     updatedAt: updated_at,
 }, (table) => ({
-    openidIdx: index("users_openid_idx").on(table.openid),
+    // openid 是登录身份的唯一标识（GitHub 用户 ID / 本地 admin），必须唯一，
+    // 否则并发首登可能写入重复用户；username 用于密码登录查询，补一个索引。
+    openidUniqueIdx: uniqueIndex("users_openid_unique_idx").on(table.openid),
+    usernameIdx: index("users_username_idx").on(table.username),
 }));
 
 export const comments = sqliteTable("comments", {

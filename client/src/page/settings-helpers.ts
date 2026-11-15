@@ -2,7 +2,6 @@ import { ConfigWrapper } from "@rin/config";
 import type { TFunction } from "i18next";
 import { client, endpoint } from "../app/runtime";
 import { defaultClientConfig, defaultServerConfig } from "../state/config";
-import { headersWithAuth } from "../utils/auth";
 
 const MASKED_SECRET = "••••••••";
 
@@ -88,7 +87,6 @@ export async function uploadFavicon(file: File, t: TFunction, showAlert: (messag
   formData.append("file", file);
   const response = await fetch(`${endpoint}/api/favicon`, {
     method: "POST",
-    headers: headersWithAuth(),
     body: formData,
     credentials: "include",
   });

@@ -12,16 +12,45 @@ which automatically generates release notes from commit messages.
 ## [Unreleased]
 
 ### Added
+- **登录限流**: `/auth/login` 增加按 IP 与按账号的双重限流（15 分钟窗口），超限返回 429 并带 `Retry-After`。
+- **旧的密码哈希自动升级**: 登录成功后，历史上的单轮 SHA-256 哈希会自动升级为 PBKDF2（150k 迭代 + 随机盐）。
+- **配置体检**: 启动时检测示例 / 弱口令的 `JWT_SECRET`、`ADMIN_PASSWORD`，以及缺失的 `FRONTEND_URL`，并打印警告。
+- **来源白名单工具**: 新增 `utils/origin.ts`，统一处理 CORS 与 OAuth 回跳的可信来源判断。
+- **安全 HTML 清洗**: Markdown 渲染新增 `rehypeSafeHtml`，移除 `script`、内联事件、`srcdoc`、`javascript:` 等执行向量，同时保留 katex / mermaid / 代码高亮所需的 class。
+- **自动备份**: 定时任务默认每 24 小时往存储桶写一份全量快照（`backup_auto_interval_hours` 可调，`0` 关闭），保证账号出事时桶里总有近期备份。
+- **灾难恢复文档**: 新增 `docs/docs/{zh,en}/guide/disaster-recovery.md`，完整说明「新账号 + 原存储桶」的恢复步骤与收尾检查。
 
 ### Changed
-
-### Deprecated
+- **登录态只依赖 HttpOnly cookie**: 前端不再把 JWT 写入 localStorage，也不再从 URL 读取 token；OAuth 回调不再把 token 拼进跳转地址。
+- **浏览量统计**: 管理员本人与常见爬虫 / 预览机器人不再计入 PV/UV；访问明细中的 IP 改为加盐哈希存储。
+- **路由按需加载**: 设置、写作、存储等后台页面改为 `React.lazy`，首屏 JS 由 ~6.36 MB 降至 ~2.04 MB。
+- **CI 精简**: 合并重复的多份工作流，移除从未生效的 `format:check` 门禁；`@rin/api`、`@rin/config`、`@rin/ui` 纳入 `turbo check`。
+- **文档**: 更新 `AGENTS.md` 中过时的 `packages/ui` 描述，补齐 `deploy:server` / `deploy:client` 脚本与日语翻译缺失的 key。
+- **恢复结果回包**: 恢复接口改为返回数据库回读的真实条数与提示（`counts` / `warnings` / `safetyBackup`），后台会把「还需手动处理」的事项直接提示给站长。
 
 ### Removed
+- **JS 可读的 `auth_token` cookie** 与前端 localStorage token 存储（登录态统一走 HttpOnly cookie）。
+- **`format:check` / `format:write` 脚本**（仓库并未接入任何格式化工具，属于空转的 CI 门禁）。
+- **OAuth 流程中的调试日志** 与硬编码的备份文件默认路径。
 
 ### Fixed
+- **列表缓存串角色**: feed 列表缓存 key 增加访问者维度，避免管理员与游客互相污染缓存。
+- **OAuth 开放重定向 / 账号接管**: 回跳地址只允许请求同主机、`FRONTEND_URL` 或本地开发地址。
+- **评论隐私泄露**: 公开评论列表不再返回游客邮箱；评论内容、昵称、站点链接增加长度与协议校验。
+- **用户表约束**: `users.openid` 改为唯一索引，补 `users.username` 索引（迁移 `0014.sql`）。
+- **部署流水线**: 生产判断改用 `workflow_run` 元数据，不再信任构建产物里的 `build-meta`，并禁止 fork 直接进生产。
+- **恢复会撞主键**: 快照里的配置行带着旧自增 id，恢复时改为整表清空 `cache` 并丢弃配置行 id，不再触发 `UNIQUE constraint failed`。
+- **恢复不清访问明细**: `visits` 纳入快照，恢复时按快照整体替换，旧站点的访问明细不再残留。
+- **坏备份会先毁数据**: 恢复前先校验快照结构，文件不合法时直接报错，现有数据一行不动。
+- **恢复后把自己锁在门外**: 恢复整表替换 `users`，现在会保留当前操作者的管理员身份，即使备份里的站长是另一个 GitHub 账号。
+- **换账号后存储不可用**: 恢复时无法解密的存储密钥会被跳过并给出提示，备份/恢复与媒体读取都会回退到环境变量默认存储，不再整站 404。
+- **恢复前没有退路**: 恢复前自动把当前数据写入桶内 `backups/pre-restore.json`，并支持恢复接口在失败时提示该快照位置。
 
 ### Security
+- **CORS**: 不再反射任意 Origin，只对白名单来源返回 `Access-Control-Allow-Origin`（仍保留 `credentials`）。
+- **JWT**: 令牌增加 `exp`（默认 7 天）、`iss`、`aud`，并校验算法。**升级后旧令牌全部失效，需要重新登录一次。**
+- **密码存储**: PBKDF2-SHA256（150k 迭代、随机盐、常量时间比较），替换原来的单轮 SHA-256。
+- **登录 / OAuth**: state 校验改为常量时间比较，state 与 redirect cookie 均改为 HttpOnly + SameSite=Lax。
 
 ## [v0.3.0] - 2026-03-12
 

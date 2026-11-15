@@ -295,8 +295,15 @@ export async function resolveFileSource(db: DB, env: Env, key: string): Promise<
 
     if (fileRow && fileRow.storageId !== DEFAULT_STORAGE_ID) {
         const storage = await getStorageRow(db, fileRow.storageId);
-        if (!storage) return null;
-        return { driver: await driverForRow(env, storage), objectKey: fileRow.objectKey, row: fileRow, storage };
+        if (storage) {
+            try {
+                return { driver: await driverForRow(env, storage), objectKey: fileRow.objectKey, row: fileRow, storage };
+            } catch (error: any) {
+                // 恢复自旧账号的存储密钥可能已解不开；若环境变量里绑定了同一个桶，
+                // 继续用默认存储读取，避免整站图片 404。
+                console.warn(`[Storage] 存储 #${storage.id} 不可用，回退到默认存储：${error?.message || error}`);
+            }
+        }
     }
 
     const envDriver = createEnvDriverIfConfigured(env);
