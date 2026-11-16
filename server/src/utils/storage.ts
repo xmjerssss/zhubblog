@@ -161,6 +161,10 @@ export async function getStorageObject(
   return response;
 }
 
+// 探测对象是否存在属于「尽力而为」的信息，不能让它拖慢整条请求链路：
+// 存储不可达时最多等 3 秒，缺配置时直接返回 null。
+const STORAGE_HEAD_TIMEOUT_MS = 3000;
+
 export async function headStorageObject(env: Env, storageKey: string): Promise<Response | null> {
   if (env.R2_BUCKET) {
     const object = await env.R2_BUCKET.head(storageKey);
@@ -170,9 +174,14 @@ export async function headStorageObject(env: Env, storageKey: string): Promise<R
     return createStorageResponse(object);
   }
 
+  if (!env.S3_ENDPOINT || !env.S3_BUCKET || !env.S3_ACCESS_KEY_ID || !env.S3_SECRET_ACCESS_KEY) {
+    return null;
+  }
+
   const client = createS3Client(env);
   const response = await client.fetch(buildS3ObjectUrl(env, storageKey), {
     method: "HEAD",
+    signal: AbortSignal.timeout(STORAGE_HEAD_TIMEOUT_MS),
   });
 
   if (response.status === 404) {
