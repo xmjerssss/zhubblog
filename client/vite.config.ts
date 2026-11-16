@@ -1,6 +1,41 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react-swc'
 import { visualizer } from "rollup-plugin-visualizer";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * Cloudflare Workers 静态资源在命中文件时由平台直接返回，Worker 里设置的
+ * cache-control 不会生效。想给带 hash 的产物加长缓存，唯一途径是产物目录下的
+ * `_headers` 文件（Cloudflare Static Assets 官方支持的响应头配置）。
+ */
+const STATIC_HEADERS = `# 由 client/vite.config.ts 自动生成，请勿手改
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+  X-Content-Type-Options: nosniff
+
+/index.html
+  Cache-Control: no-cache, must-revalidate
+  X-Content-Type-Options: nosniff
+
+/
+  Cache-Control: no-cache, must-revalidate
+  X-Content-Type-Options: nosniff
+`;
+
+function staticAssetHeaders() {
+  let outDir = "dist/client";
+  return {
+    name: "rin-static-headers",
+    apply: "build" as const,
+    configResolved(config: { build: { outDir: string } }) {
+      outDir = config.build.outDir;
+    },
+    closeBundle() {
+      writeFileSync(join(outDir, "_headers"), STATIC_HEADERS, "utf8");
+    },
+  };
+}
 
 // Markdown 渲染链所属的第三方包（unified / remark / rehype / katex / 高亮 / 清洗）
 const MARKDOWN_VENDOR_PATTERN =
@@ -55,6 +90,7 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       react(),
+      staticAssetHeaders(),
       ...(analyzeBundle
         ? [
             visualizer({
