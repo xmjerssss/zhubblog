@@ -180,29 +180,45 @@ async function generateFeed(env: Env, db: DB, frontendUrl: string, c?: AppContex
     }
 
     // Try to discover stored favicon assets.
-    for (const [_mimeType, ext] of Object.entries(FAVICON_ALLOWED_TYPES)) {
+    // 原实现串行探测 originFavicon + favicon，存储慢时每个 RSS 请求要多等数次 RTT；
+    // 这里全部并发发起，最坏耗时从「探测次数 × 超时」降到「1 × 超时」。
+    const originFaviconChecks = Object.entries(FAVICON_ALLOWED_TYPES).map(async ([_mimeType, ext]) => {
         const originFaviconKey = path_join(env.S3_FOLDER || "", `originFavicon${ext}`);
+        // Server-Timing 的同一 timer 名不能并发 end，否则控制台刷 "Timer does not exist"。
+        const timerName = `rss_origin_favicon_fetch_${ext.replace(".", "")}`;
         try {
             const response = c
-                ? await profileAsync(c, 'rss_origin_favicon_fetch', () => headStorageObject(env, originFaviconKey))
+                ? await profileAsync(c, timerName, () => headStorageObject(env, originFaviconKey))
                 : await headStorageObject(env, originFaviconKey);
-            if (response) {
-                feedConfig.image = getStoragePublicUrl(env, originFaviconKey, publicBaseUrl);
-                break;
-            }
+            return response ? getStoragePublicUrl(env, originFaviconKey, publicBaseUrl) : null;
         } catch (error) {
-            continue;
+            return null;
         }
-    }
+    });
 
-    try {
-        const response = c
-            ? await profileAsync(c, 'rss_favicon_fetch', () => headStorageObject(env, faviconKey))
-            : await headStorageObject(env, faviconKey);
-        if (response) {
-            feedConfig.favicon = getStoragePublicUrl(env, faviconKey, publicBaseUrl);
+    const faviconCheck = (async () => {
+        try {
+            const response = c
+                ? await profileAsync(c, 'rss_favicon_fetch', () => headStorageObject(env, faviconKey))
+                : await headStorageObject(env, faviconKey);
+            return response ? getStoragePublicUrl(env, faviconKey, publicBaseUrl) : null;
+        } catch (error) {
+            return null;
         }
-    } catch (error) { }
+    })();
+
+    const [originFavicons, faviconUrl] = await Promise.all([
+        Promise.all(originFaviconChecks),
+        faviconCheck,
+    ]);
+
+    const originFaviconUrl = originFavicons.find((url): url is string => Boolean(url));
+    if (originFaviconUrl) {
+        feedConfig.image = originFaviconUrl;
+    }
+    if (faviconUrl) {
+        feedConfig.favicon = faviconUrl;
+    }
 
     const feed = new Feed(feedConfig);
 
