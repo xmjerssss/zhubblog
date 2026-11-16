@@ -1,7 +1,8 @@
 import "katex/dist/katex.min.css";
 import React, { cloneElement, isValidElement, useEffect, useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+// 只注册常用语言的 PrismLight，避免把 Prism 全量语法一起打进产物（详见 utils/syntax-highlight.ts）
+import { SyntaxHighlighter } from "../utils/syntax-highlight";
 import {
   base16AteliersulphurpoolLight,
   vscDarkPlus,
