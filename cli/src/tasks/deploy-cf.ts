@@ -1,5 +1,6 @@
 import { $ } from "bun";
-import { readdir, unlink } from "node:fs/promises";
+import { readdir, stat, unlink } from "node:fs/promises";
+import { join, relative } from "node:path";
 import stripIndent from "strip-indent";
 import {
   fixTopField,
@@ -66,16 +67,132 @@ async function syncWorkerSecrets(workerName: string) {
   }
 }
 
-async function buildClient() {
-  const distIndex = Bun.file("./dist/client/index.html");
-  if (await distIndex.exists()) {
-    console.log("✅ Using pre-built client from ./dist/client");
-    return;
+const CLIENT_SOURCE_TARGETS = [
+  "./client/src",
+  "./client/public",
+  "./client/index.html",
+  "./client/vite.config.ts",
+  "./client/tailwind.config.ts",
+  "./client/package.json",
+  "./packages/ui/src",
+  "./packages/api/src",
+  "./packages/config/src",
+] as const;
+
+const CLIENT_ASSET_REF_PATTERN =
+  /assets\/([A-Za-z0-9_./\-]+?\.(?:js|mjs|css|woff2?|ttf|otf|png|jpe?g|gif|svg|webp|avif|ico|wasm))/g;
+
+async function newestMtime(target: string): Promise<number> {
+  try {
+    const info = await stat(target);
+    if (!info.isDirectory()) {
+      return info.mtimeMs;
+    }
+
+    let newest = info.mtimeMs;
+    const entries = await readdir(target, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      newest = Math.max(newest, await newestMtime(join(target, entry.name)));
+    }
+    return newest;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * dist/client 是否为陈旧产物：任何参与构建的源码比 index.html 更新，就必须重新构建。
+ * 旧实现只要 dist/client/index.html 存在就跳过构建，会把上一版产物部署上去，
+ * 线上表现为「新 HTML / 旧 chunk」或反之，触发 Failed to fetch dynamically imported module。
+ */
+export async function isClientBuildStale(distDir = "./dist/client"): Promise<boolean> {
+  const indexPath = join(distDir, "index.html");
+  if (!(await Bun.file(indexPath).exists())) {
+    return true;
   }
 
-  console.log("🔨 Building client...");
-  await $`cd client && ${bunExec} run build`.quiet();
-  console.log("✅ Client built successfully");
+  const distMtime = (await stat(indexPath)).mtimeMs;
+  let newestSource = 0;
+  for (const target of CLIENT_SOURCE_TARGETS) {
+    newestSource = Math.max(newestSource, await newestMtime(target));
+  }
+
+  return newestSource > distMtime;
+}
+
+async function collectFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  let entries: Awaited<ReturnType<typeof readdir>>;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return files;
+  }
+
+  for (const entry of entries) {
+    const full = join(root, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await collectFiles(full)));
+    } else if (entry.isFile()) {
+      files.push(full);
+    }
+  }
+
+  return files;
+}
+
+/**
+ * 部署前自检：index.html / entry chunk 里引用的每个 assets 文件都必须真实存在。
+ * 缺一个，线上就是一次白屏 + 「Failed to fetch dynamically imported module」。
+ */
+export async function assertClientBuildIntegrity(distDir = "./dist/client"): Promise<void> {
+  const indexPath = join(distDir, "index.html");
+  if (!(await Bun.file(indexPath).exists())) {
+    throw new Error(`[deploy] ${indexPath} 不存在，请先构建 client`);
+  }
+
+  const assetsDir = join(distDir, "assets");
+  const files = await collectFiles(distDir);
+  const existing = new Set(
+    files
+      .map((file) => relative(assetsDir, file).replace(/\\/g, "/"))
+      .filter((name) => !name.startsWith("../")),
+  );
+
+  const referenced = new Map<string, string>();
+
+  for (const file of files) {
+    if (!/\.(?:js|mjs|css|html)$/.test(file)) continue;
+    const text = await Bun.file(file).text();
+    for (const match of text.matchAll(CLIENT_ASSET_REF_PATTERN)) {
+      referenced.set(match[1]!, relative(distDir, file));
+    }
+  }
+
+  const missing = [...referenced.entries()].filter(([asset]) => !existing.has(asset));
+
+  if (missing.length > 0) {
+    const detail = missing
+      .slice(0, 10)
+      .map(([asset, from]) => `  - assets/${asset}（被 ${from} 引用）`)
+      .join("\n");
+    throw new Error(
+      `[deploy] dist/client 缺少 ${missing.length} 个被引用的静态资源，已中止部署：\n${detail}`,
+    );
+  }
+}
+
+async function buildClient() {
+  if (!(await isClientBuildStale())) {
+    console.log("✅ Using pre-built client from ./dist/client (source unchanged)");
+  } else {
+    console.log("🔨 Building client...");
+    await $`cd client && ${bunExec} run build`.quiet();
+    console.log("✅ Client built successfully");
+  }
+
+  await assertClientBuildIntegrity();
 }
 
 type R2BucketInfo = {
