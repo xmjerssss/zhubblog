@@ -1,4 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from 'bun:test';
+
+// RSS 首个用例包含 markdown 渲染链（unified/remark/rehype/feed）的动态 import 冷启动，
+// 低配 CI 上会超过 bun 默认 5s 超时。这是冷启动成本而非逻辑失败，因此放宽到 20s。
+setDefaultTimeout(20000);
 import { RSSService, rssCrontab } from '../rss';
 import { Hono } from "hono";
 import type { Variables } from "../../core/hono-types";
