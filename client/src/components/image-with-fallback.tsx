@@ -1,4 +1,5 @@
 import type { ImgHTMLAttributes } from "react";
+import { normalizeImageUrl } from "../utils/image-upload";
 import { useImageLoadState } from "../utils/use-image-load-state";
 
 type ImageWithFallbackProps = Omit<
@@ -17,7 +18,7 @@ export function ImageWithFallback({
   src,
   ...props
 }: ImageWithFallbackProps) {
-  const normalizedSrc = src?.trim() || undefined;
+  const normalizedSrc = normalizeImageUrl(src) || undefined;
   const { failed, imageRef, loaded, onError, onLoad } = useImageLoadState(normalizedSrc);
   const showFallback = !normalizedSrc || failed;
 
