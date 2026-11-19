@@ -243,6 +243,17 @@ function storeInEdgeCache(c: AppContext, cache: EdgeCache, cacheKey: Request, re
     }
 }
 
+/**
+ * 对象不存在时的响应。
+ *
+ * 必须显式 no-store：图片是按 URL 加载的，浏览器与中间的代理会把 404 一起缓存住，
+ * 等对象补回来（例如重新上传同一张图）时，用户刷新看到的还是那张破图，
+ * 会误判成「修了也没用」。
+ */
+function blobNotFound(c: AppContext) {
+    return c.text("Not found", 404, { "Cache-Control": "no-store" });
+}
+
 export function BlobService(): Hono {
     const app = new Hono();
 
@@ -286,7 +297,7 @@ export function BlobService(): Hono {
         try {
             const sources = await profileAsync(c, "blob_resolve", () => resolveFileSources(db, env, key));
             if (sources.length === 0) {
-                return c.text("Not found", 404);
+                return blobNotFound(c);
             }
 
             let redirectResponse: Response | null = null;
@@ -357,7 +368,7 @@ export function BlobService(): Hono {
             }
 
             if (redirectResponse) return redirectResponse;
-            return c.text("Not found", 404);
+            return blobNotFound(c);
         } catch (error) {
             console.error("Blob fetch failed:", error);
             return c.text("Blob fetch failed", 500);

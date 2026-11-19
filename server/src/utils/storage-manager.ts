@@ -187,6 +187,45 @@ export interface FileMeta {
     size: number;
 }
 
+/**
+ * 复用之前先确认对象真的还在。
+ *
+ * 内容哈希作 key 意味着「同一个 key 永远是同一份内容」，所以记录命中就直接复用本身没错，
+ * 错在记录可能指向一个早就丢了对象的位置：换过存储、桶被清空、手工删过图、上传中途只写了库
+ * 没写对象……这时复用会把一个 404 的旧地址还给前端，表现为「上传成功但一直是破图」；
+ * 又因为 key 不变、前端草稿值也没变，连保存按钮都不出现，用户完全无从下手。
+ *
+ * 所以复用前用 head 探一次；探不到就当作不存在，老老实实重传一遍（key 不变，依然幂等）。
+ */
+async function storedObjectExists(db: DB, env: Env, row: StorageFileRow): Promise<boolean> {
+    try {
+        let driver: StorageDriver;
+        let folder = "";
+        if (row.storageId === DEFAULT_STORAGE_ID) {
+            const envDriver = createEnvDriverIfConfigured(env);
+            if (!envDriver) return false;
+            driver = envDriver.driver;
+            folder = envDriver.folder;
+        } else {
+            const storage = await getStorageRow(db, row.storageId);
+            if (!storage) return false;
+            driver = await driverForRow(env, storage);
+            folder = storage.folder;
+        }
+        const objectKey = row.objectKey || (folder ? path_join(folder, row.key) : row.key);
+        return Boolean(await driver.head(objectKey));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // 少数 WebDAV 服务端不支持 HEAD（405 / 501）：这是「问不出来」而不是「不存在」，
+        // 按存在处理，否则每次上传都会白白把同一份内容重写一遍。
+        if (/405|501|method not allowed|not implemented/i.test(message)) return true;
+        // 其余探测失败（密钥解不开、网络抖动、权限不足）既不能冒认对象存在，
+        // 也不该让整个上传跟着失败：按「无法确认」处理，交给后面的真实上传去试。
+        console.warn(`[Storage] 校验 ${row.key} 是否仍在存储中失败，将按缺失重新上传`, error);
+        return false;
+    }
+}
+
 export async function storeFile(
     db: DB,
     env: Env,
@@ -195,12 +234,8 @@ export async function storeFile(
     baseUrl?: string,
 ): Promise<StoredFile> {
     const existing = await getFileRow(db, meta.key);
-    if (existing) {
-        const stillValid =
-            existing.storageId === DEFAULT_STORAGE_ID || Boolean(await getStorageRow(db, existing.storageId));
-        if (stillValid) {
-            return { key: meta.key, url: buildBlobUrl(meta.key, baseUrl), storageId: existing.storageId, reused: true };
-        }
+    if (existing && (await storedObjectExists(db, env, existing))) {
+        return { key: meta.key, url: buildBlobUrl(meta.key, baseUrl), storageId: existing.storageId, reused: true };
     }
 
     const candidates = await pickUploadCandidates(db, env, meta.size);
