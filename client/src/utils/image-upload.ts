@@ -77,6 +77,27 @@ export function stripImageUrlMetadata(url?: string | null) {
   return parseImageUrlMetadata(url).src;
 }
 
+// 站内文件一律由 /api/blob/<key> 提供，key 里已经带内容哈希。
+// 文章里存的历史图片可能是老域名（换域名 / 换 Worker 后就是死链），
+// 显示时统一改写成当前站点的相对路径，换域名、换存储都不影响老文章。
+const BLOB_PATH_PATTERN = /^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/]+(\/api\/blob\/.*)$/i;
+
+export function normalizeImageUrl(url?: string | null) {
+  if (!url) {
+    return "";
+  }
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return "";
+  }
+  // 只改站内 blob 地址，外链图床（含 data: / blob:）原样保留。
+  const matched = trimmed.match(BLOB_PATH_PATTERN);
+  if (matched) {
+    return matched[1];
+  }
+  return trimmed;
+}
+
 export function buildMarkdownImage(fileName: string, url: string, metadata: ImageMetadata = {}) {
   const safeAlt = fileName.replace(/[[\]]/g, "");
   const safeUrl = url.replace(/\s/g, "%20");
@@ -273,7 +294,8 @@ export async function uploadImageFile(file: File): Promise<UploadedImageResult> 
   }
 
   return {
-    url,
+    // 只存相对路径：文章内容与域名、与具体存储桶彻底解耦，换域名不会变成死链。
+    url: normalizeImageUrl(url),
     ...(metadataResult.status === "fulfilled" ? metadataResult.value : {}),
   };
 }
