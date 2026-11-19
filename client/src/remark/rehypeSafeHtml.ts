@@ -117,13 +117,22 @@ function sanitizeProperties(node: HastNode): void {
   }
 }
 
+// GFM 任务列表（- [ ] / - [x]）由 remark-gfm 生成只读 checkbox。
+// input 整体在黑名单里会被一并剥掉，导致任务列表只剩文字；这里只放行
+// type=checkbox 的只读勾选框，其余 input 仍然丢弃。
+function isTaskListCheckbox(node: HastNode): boolean {
+  if (node.tagName?.toLowerCase() !== 'input') return false;
+  const type = node.properties?.type;
+  return typeof type === 'string' && type.toLowerCase() === 'checkbox';
+}
+
 function walk(node: HastNode): void {
   if (!node.children || node.children.length === 0) return;
 
   const next: HastNode[] = [];
 
   for (const child of node.children) {
-    if (child.type === 'element' && child.tagName && DROPPED_TAGS.has(child.tagName.toLowerCase())) {
+    if (child.type === 'element' && child.tagName && DROPPED_TAGS.has(child.tagName.toLowerCase()) && !isTaskListCheckbox(child)) {
       continue;
     }
 

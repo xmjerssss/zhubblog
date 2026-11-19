@@ -309,6 +309,19 @@ export function Markdown({ content }: { content: string }) {
             </li>
           );
         },
+        input({ type, checked, ...props }) {
+          // 只处理 GFM 任务列表的只读勾选框；其它 input 已在 rehypeSafeHtml 中丢弃。
+          if (type !== "checkbox") return null;
+          return (
+            <input
+              {...props}
+              type="checkbox"
+              disabled
+              defaultChecked={Boolean(checked)}
+              className="mr-2 h-4 w-4 translate-y-[2px] cursor-default accent-[#0686c8]"
+            />
+          );
+        },
         a({ children, ...props }) {
           return (
             <a
