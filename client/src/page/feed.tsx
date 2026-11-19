@@ -280,7 +280,7 @@ export function FeedPage({ id, TOC, clean }: { id: string, TOC: () => JSX.Elemen
                   )}
                   <div className="flex min-w-0 flex-row items-center">
                     <ImageWithFallback
-                      src={feed.user.avatar || "/avatar.png"}
+                      src={normalizeImageUrl(feed.user.avatar) || "/favicon.png"}
                       alt={feed.user.username}
                       className="h-8 w-8 rounded-full"
                     />
@@ -570,7 +570,7 @@ function CommentItem({
   const { t } = useTranslation();
   const profile = useContext(ProfileContext);
   const commenterName = comment.user?.username || comment.guestName || t("anonymous");
-  const commenterAvatar = comment.user?.avatar || "/avatar.png";
+  const commenterAvatar = normalizeImageUrl(comment.user?.avatar) || "/favicon.png";
 
   function deleteComment() {
     showConfirm(
