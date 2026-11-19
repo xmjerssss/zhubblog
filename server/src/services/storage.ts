@@ -3,12 +3,15 @@ import type { AppContext } from "../core/hono-types";
 import { profileAsync } from "../core/server-timing";
 import { buildFileResponse } from "../utils/storage-drivers";
 import {
+    DEFAULT_STORAGE_ID,
     buildBlobUrl,
     buildFileKey,
     detectFileCategory,
+    getSourceDriver,
+    healFileRecord,
     planDirectUpload,
     recordFile,
-    resolveFileSource,
+    resolveFileSources,
     storeFile,
 } from "../utils/storage-manager";
 import { getStorageRow, driverForRow } from "../utils/storage-manager";
@@ -181,6 +184,65 @@ export function StorageService(): Hono {
     return app;
 }
 
+// ---------------------------------------------------------------------------
+// /api/blob 边缘缓存
+//
+// 文件 key 是内容哈希（同 key 内容永不改变），所以可以放心缓存一年。
+// 缓存命中时整条请求不碰 D1、不回源存储，首屏图片从几十毫秒的 Worker 读取
+// 变成同机房缓存命中，这是图片加载速度提升最大的一环。
+// ---------------------------------------------------------------------------
+
+type EdgeCache = {
+    match(request: Request): Promise<Response | undefined>;
+    put(request: Request, response: Response): Promise<void>;
+};
+
+function getEdgeCache(): EdgeCache | null {
+    const store = (globalThis as any).caches;
+    if (!store || !store.default) return null;
+    return store.default as EdgeCache;
+}
+
+/** 缓存 key 去掉 query/hash：?v=123 之类的参数不应该造成多份副本。 */
+function buildBlobCacheKey(url: string): Request {
+    const target = new URL(url);
+    target.search = "";
+    target.hash = "";
+    return new Request(target.toString(), { method: "GET" });
+}
+
+function matchesIfNoneMatch(ifNoneMatch: string | null | undefined, etag: string | null): boolean {
+    if (!ifNoneMatch || !etag) return false;
+    return ifNoneMatch
+        .split(",")
+        .map((value) => value.trim())
+        .some((value) => value === "*" || value === etag || value === `W/${etag}`);
+}
+
+function toNotModified(response: Response): Response {
+    const headers = new Headers();
+    for (const name of ["cache-control", "etag", "last-modified", "access-control-allow-origin", "cross-origin-resource-policy"]) {
+        const value = response.headers.get(name);
+        if (value) headers.set(name, value);
+    }
+    return new Response(null, { status: 304, headers });
+}
+
+function storeInEdgeCache(c: AppContext, cache: EdgeCache, cacheKey: Request, response: Response) {
+    const pristine = new Response(response.clone().body, {
+        status: response.status,
+        headers: new Headers(response.headers),
+    });
+    const task = cache.put(cacheKey, pristine).catch((error) => {
+        console.warn("[Blob] 写入边缘缓存失败", error);
+    });
+    try {
+        c.executionCtx.waitUntil(task);
+    } catch {
+        // 没有 execution context（本地测试 / 非 Workers 运行时）时直接忽略。
+    }
+}
+
 export function BlobService(): Hono {
     const app = new Hono();
 
@@ -200,34 +262,102 @@ export function BlobService(): Hono {
             return c.text("Invalid blob key", 400);
         }
 
+        // 视频拖动进度条走 Range，不能缓存分片响应（Cache API 不支持 206）。
+        const range = c.req.header("Range");
+        const cache = range ? null : getEdgeCache();
+        const cacheKey = cache ? buildBlobCacheKey(c.req.url) : null;
+
+        if (cache && cacheKey) {
+            try {
+                const cached = await cache.match(cacheKey);
+                if (cached) {
+                    if (matchesIfNoneMatch(c.req.header("If-None-Match"), cached.headers.get("ETag"))) {
+                        return toNotModified(cached);
+                    }
+                    const headers = new Headers(cached.headers);
+                    headers.set("X-Edge-Cache", "HIT");
+                    return new Response(cached.body, { status: cached.status, headers });
+                }
+            } catch (error) {
+                console.warn("[Blob] 读取边缘缓存失败", error);
+            }
+        }
+
         try {
-            const source = await profileAsync(c, "blob_resolve", () => resolveFileSource(db, env, key));
-            if (!source) {
+            const sources = await profileAsync(c, "blob_resolve", () => resolveFileSources(db, env, key));
+            if (sources.length === 0) {
                 return c.text("Not found", 404);
             }
 
-            const storage = source.storage;
-            if (storage?.redirect === 1 && storage.publicUrl) {
-                const target = `${storage.publicUrl.replace(/\/+$/, "")}/${source.objectKey
-                    .split("/")
-                    .map(encodeURIComponent)
-                    .join("/")}`;
-                return new Response(null, {
-                    status: 302,
-                    headers: { Location: target, "Cache-Control": "public, max-age=300" },
+            let redirectResponse: Response | null = null;
+
+            for (let index = 0; index < sources.length; index += 1) {
+                const source = sources[index];
+                const storage = source.storage;
+
+                if (storage?.redirect === 1 && storage.publicUrl) {
+                    const target = `${storage.publicUrl.replace(/\/+$/, "")}/${source.objectKey
+                        .split("/")
+                        .map(encodeURIComponent)
+                        .join("/")}`;
+                    const redirect = new Response(null, {
+                        status: 302,
+                        headers: { Location: target, "Cache-Control": "public, max-age=300" },
+                    });
+                    // 首选位置就是配置了公开域名的存储：按原策略直接跳转，避免多一次回源。
+                    if (index === 0) return redirect;
+                    // 兜底位置是 redirect 存储：先继续尝试直读，全都读不到再用它。
+                    redirectResponse = redirectResponse || redirect;
+                    continue;
+                }
+
+                const driver = await getSourceDriver(source);
+                if (!driver) continue;
+
+                let upstream: Response | null = null;
+                try {
+                    upstream = await profileAsync(c, "blob_fetch", () => driver.get(source.objectKey, range));
+                } catch (error) {
+                    console.error(`[Blob] 从存储 #${storage?.id ?? DEFAULT_STORAGE_ID} 读取 ${source.objectKey} 失败`, error);
+                    continue;
+                }
+                if (!upstream) continue;
+
+                // 命中位置与数据库记录不一致时回写记录，下次直接命中，不用再逐个探测。
+                if (source.heal) {
+                    const healing = healFileRecord(db, key, source.heal, {
+                        name: source.row?.name,
+                        mime: source.row?.mime || upstream.headers.get("content-type"),
+                        size: Number(upstream.headers.get("content-length")) || undefined,
+                    });
+                    try {
+                        c.executionCtx.waitUntil(healing);
+                    } catch {
+                        await healing;
+                    }
+                }
+
+                const response = buildFileResponse(upstream, {
+                    mime: source.row?.mime,
+                    name: source.row?.name,
                 });
+
+                if (matchesIfNoneMatch(c.req.header("If-None-Match"), response.headers.get("ETag"))) {
+                    return toNotModified(response);
+                }
+
+                if (cache && cacheKey && response.status === 200) {
+                    storeInEdgeCache(c, cache, cacheKey, response);
+                    const headers = new Headers(response.headers);
+                    headers.set("X-Edge-Cache", "MISS");
+                    return new Response(response.body, { status: 200, headers });
+                }
+
+                return response;
             }
 
-            const range = c.req.header("Range");
-            const upstream = await profileAsync(c, "blob_fetch", () => source.driver.get(source.objectKey, range));
-            if (!upstream) {
-                return c.text("Not found", 404);
-            }
-
-            return buildFileResponse(upstream, {
-                mime: source.row?.mime,
-                name: source.row?.name,
-            });
+            if (redirectResponse) return redirectResponse;
+            return c.text("Not found", 404);
         } catch (error) {
             console.error("Blob fetch failed:", error);
             return c.text("Blob fetch failed", 500);
