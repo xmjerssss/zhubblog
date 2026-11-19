@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { contentHasImagesMissingMetadata, extractImage, extractImageWithMetadata, listContentImageUrls, stripImageMetadataFromUrl } from '../image';
+import { contentHasImagesMissingMetadata, extractImage, extractImageWithMetadata, listContentImageUrls, normalizeBlobUrl, normalizeFeedImageUrl, stripImageMetadataFromUrl } from '../image';
 
 describe('extractImage', () => {
     it('should extract image URL from markdown', () => {
@@ -80,5 +80,37 @@ describe('listContentImageUrls', () => {
             'https://example.com/markdown.png',
             'https://example.com/html.png',
         ]);
+    });
+});
+
+describe('normalizeBlobUrl', () => {
+    it('should rewrite relative blob path with origin', () => {
+        expect(normalizeBlobUrl('/api/blob/a.png', 'https://blog.example.com')).toBe('https://blog.example.com/api/blob/a.png');
+    });
+
+    it('should rewrite absolute blob url from another host with origin', () => {
+        expect(normalizeBlobUrl('https://old.example.com/api/blob/a.png', 'https://new.example.com')).toBe('https://new.example.com/api/blob/a.png');
+    });
+
+    it('should keep other urls untouched', () => {
+        expect(normalizeBlobUrl('https://cdn.example.com/a.png', 'https://blog.example.com')).toBe('https://cdn.example.com/a.png');
+        expect(normalizeBlobUrl(undefined, 'https://blog.example.com')).toBeUndefined();
+        expect(normalizeBlobUrl('   ', 'https://blog.example.com')).toBeUndefined();
+    });
+
+    it('should keep relative path when origin is missing', () => {
+        expect(normalizeBlobUrl('/api/blob/a.png')).toBe('/api/blob/a.png');
+    });
+});
+
+describe('normalizeFeedImageUrl', () => {
+    it('should return absolute http(s) url for relative blob path', () => {
+        expect(normalizeFeedImageUrl('/api/blob/a.png', 'https://blog.example.com/')).toBe('https://blog.example.com/api/blob/a.png');
+    });
+
+    it('should drop urls that are not absolute http(s)', () => {
+        expect(normalizeFeedImageUrl('/images/a.png', 'https://blog.example.com')).toBeUndefined();
+        expect(normalizeFeedImageUrl('./images/a.png')).toBeUndefined();
+        expect(normalizeFeedImageUrl('mailto:a@b.com')).toBeUndefined();
     });
 });
