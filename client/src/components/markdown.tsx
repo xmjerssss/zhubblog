@@ -22,7 +22,7 @@ import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
 import { drawBlurhashToCanvas } from "../utils/blurhash";
 import { useColorMode } from "../utils/darkModeUtils";
-import { normalizeImageUrl, parseImageUrlMetadata } from "../utils/image-upload";
+import { normalizeBlobPaths, normalizeImageUrl, parseImageUrlMetadata } from "../utils/image-upload";
 import { useImageLoadState } from "../utils/use-image-load-state";
 
 const countNewlinesBeforeNode = (text: string, offset: number) => {
@@ -144,7 +144,8 @@ export function Markdown({ content }: { content: string }) {
   }, [content]);
 
   const normalizedContent = useMemo(() => {
-    return ensureBlankLinesAroundHtmlBlocks(content);
+    // 老文章里的图片 / 附件可能写着已经停用的历史域名，统一改写成同源路径。
+    return ensureBlankLinesAroundHtmlBlocks(normalizeBlobPaths(content));
   }, [content]);
 
   const Content = useMemo(() => (

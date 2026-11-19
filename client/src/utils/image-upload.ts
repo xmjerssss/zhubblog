@@ -81,6 +81,7 @@ export function stripImageUrlMetadata(url?: string | null) {
 // 文章里存的历史图片可能是老域名（换域名 / 换 Worker 后就是死链），
 // 显示时统一改写成当前站点的相对路径，换域名、换存储都不影响老文章。
 const BLOB_PATH_PATTERN = /^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/]+(\/api\/blob\/.*)$/i;
+const BLOB_ABSOLUTE_IN_TEXT = /(?:https?:)?\/\/[^/\s"'<>)]+(\/api\/blob\/)/gi;
 
 export function normalizeImageUrl(url?: string | null) {
   if (!url) {
@@ -298,4 +299,16 @@ export async function uploadImageFile(file: File): Promise<UploadedImageResult> 
     url: normalizeImageUrl(url),
     ...(metadataResult.status === "fulfilled" ? metadataResult.value : {}),
   };
+}
+
+/**
+ * 整篇 Markdown / HTML 里指向站内文件的绝对地址统一改成相对路径。
+ * 覆盖图片 ![]() 、附件 [](...) 、<a href>、<video src>，
+ * 这样换域名、换存储都不影响老文章的图片和附件。
+ */
+export function normalizeBlobPaths(text: string) {
+  if (!text) {
+    return text;
+  }
+  return text.replace(BLOB_ABSOLUTE_IN_TEXT, "$1");
 }
