@@ -4,14 +4,16 @@ import { timeago } from "../utils/timeago";
 import { HashTag } from "./hashtag";
 import { useEffect, useRef } from "react";
 import { drawBlurhashToCanvas } from "../utils/blurhash";
-import { parseImageUrlMetadata } from "../utils/image-upload";
+import { normalizeImageUrl, parseImageUrlMetadata } from "../utils/image-upload";
 import { useImageLoadState } from "../utils/use-image-load-state";
 import { type FeedCardVariant, normalizeFeedCardVariant } from "./feed-card-options";
 import { useSiteConfig } from "../hooks/useSiteConfig";
 
 function FeedCardImage({ src, variant }: { src: string; variant: FeedCardVariant }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const { src: cleanSrc, blurhash, width, height } = parseImageUrlMetadata(src);
+    const { src: rawSrc, blurhash, width, height } = parseImageUrlMetadata(src);
+    // 老文章封面可能指向历史域名，统一改写为同源 blob 地址。
+    const cleanSrc = normalizeImageUrl(rawSrc);
     const { failed, imageRef, loaded, onError, onLoad } = useImageLoadState(cleanSrc);
     const aspectRatio = width && height ? `${width} / ${height}` : "16 / 9";
     const imageFrameClass =
@@ -53,6 +55,8 @@ function FeedCardImage({ src, variant }: { src: string; variant: FeedCardVariant
                 alt=""
                 width={width}
                 height={height}
+                loading="lazy"
+                decoding="async"
                 onLoad={onLoad}
                 onError={onError}
                 className={`absolute inset-0 h-full w-full object-cover object-center hover:scale-105 translation duration-300 ${failed || (blurhash && !loaded) ? "opacity-0" : "opacity-100"
