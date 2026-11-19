@@ -20,6 +20,20 @@ export type StorageFileRow = typeof storageFiles.$inferSelect;
 
 export const DEFAULT_STORAGE_ID = 0;
 
+/**
+ * 单个 key 最多探测多少个「存储 + 路径」组合。
+ * 不存在的 key（被删的老图 / 爬虫瞎扫）会逐个回源，必须给个上限，
+ * 否则一次 404 可能打出十几次存储读请求。
+ */
+const MAX_FILE_SOURCE_CANDIDATES = 8;
+
+/** 存储写满 / 配额用尽（R2、S3、WebDAV 的错误文案各不相同，统一按文案兜底识别）。 */
+function looksLikeCapacityError(error: unknown): boolean {
+    if (isCapacityError(error)) return true;
+    const message = error instanceof Error ? error.message : String(error);
+    return /quota|storage limit|no space|insufficient storage|bucket (is )?full|space left/i.test(message);
+}
+
 export type FileCategory = "images" | "videos" | "files";
 
 /** 根据 MIME 类型和文件名后缀自动识别分类文件夹 */
@@ -191,6 +205,7 @@ export async function storeFile(
 
     const candidates = await pickUploadCandidates(db, env, meta.size);
     let lastError: unknown = null;
+    let defaultStorageFull = false;
 
     for (const candidate of candidates) {
         try {
@@ -240,6 +255,9 @@ export async function storeFile(
             lastError = error;
             const message = error instanceof Error ? error.message : String(error);
             console.error(`[Storage] upload to #${candidate.id} failed: ${message}`);
+            if (candidate.id === DEFAULT_STORAGE_ID && looksLikeCapacityError(error)) {
+                defaultStorageFull = true;
+            }
             if (candidate.row) {
                 try {
                     await markStorage(db, candidate.id, isCapacityError(error) ? "full" : "error", message);
@@ -250,6 +268,9 @@ export async function storeFile(
         }
     }
 
+    if (defaultStorageFull) {
+        throw new Error("默认存储（部署时绑定的 R2 / S3）已满或不可写入：请在后台「存储管理」添加新的存储后再上传。已发布文章里的旧图片不受影响，仍会从原来的存储读取。");
+    }
     throw lastError instanceof Error ? lastError : new Error("Upload failed");
 }
 
@@ -283,32 +304,169 @@ export async function planDirectUpload(
     return null;
 }
 
+/**
+ * 一个「可能存着这个对象」的位置。
+ *
+ * driver 是惰性的：只有真的轮到这个候选去读取时才会去解密密钥、构造驱动，
+ * 命中第一个候选后不会为其余存储付出任何代价。
+ */
 export interface FileSource {
-    driver: StorageDriver;
+    driver?: StorageDriver;
+    resolveDriver?: () => Promise<StorageDriver>;
     objectKey: string;
     row?: StorageFileRow;
     storage?: StorageRow;
+    /**
+     * 命中该候选后需要把 storage_files 记录纠正为真实位置。
+     * 覆盖三种情况：记录不存在（旧文件）、存储 ID 悬空（旧存储被删）、
+     * 对象路径与记录不一致（folder 变更 / 手工迁移）。
+     */
+    heal?: { storageId: number; objectKey: string };
 }
 
-export async function resolveFileSource(db: DB, env: Env, key: string): Promise<FileSource | null> {
-    const fileRow = await getFileRow(db, key);
+export async function getSourceDriver(source: FileSource): Promise<StorageDriver | null> {
+    if (source.driver) return source.driver;
+    if (!source.resolveDriver) return null;
+    try {
+        return await source.resolveDriver();
+    } catch (error: any) {
+        console.warn(`[Storage] 存储 #${source.storage?.id ?? DEFAULT_STORAGE_ID} 不可用：${error?.message || error}`);
+        return null;
+    }
+}
 
-    if (fileRow && fileRow.storageId !== DEFAULT_STORAGE_ID) {
-        const storage = await getStorageRow(db, fileRow.storageId);
+function uniqueObjectKeys(keys: Array<string | undefined | null>): string[] {
+    const result: string[] = [];
+    for (const key of keys) {
+        if (!key) continue;
+        const normalized = key.replace(/^\/+/, "");
+        if (normalized && !result.includes(normalized)) {
+            result.push(normalized);
+        }
+    }
+    return result;
+}
+
+/** 该 key 在一个存储里可能的对象路径：数据库记录的精确路径 → folder + key → 裸 key */
+function objectKeyCandidates(key: string, folder: string, recorded?: string): string[] {
+    return uniqueObjectKeys([recorded, folder ? path_join(folder, key) : key, key]);
+}
+
+/**
+ * 按优先级列出所有可能存着该对象的候选位置（不做任何网络请求）：
+ * 1. storage_files 记录的存储（精确路径优先）
+ * 2. 环境变量默认存储（R2 binding / S3_*）
+ * 3. 其余存储（含已停用 / 归档桶，按 priority 从高到低）
+ *
+ * 这样即使 R2 存满后换了新存储、或把旧存储停用了，历史文章里的图片依然能读出来。
+ */
+export async function resolveFileSources(db: DB, env: Env, key: string): Promise<FileSource[]> {
+    let fileRow: StorageFileRow | undefined;
+    let rows: StorageRow[] = [];
+    try {
+        fileRow = await getFileRow(db, key);
+        rows = await listStorageRows(db);
+    } catch (error) {
+        // 数据库抖动时不能让整站图片挂掉，继续尝试用默认存储兜底。
+        console.error("[Storage] 读取存储记录失败，退回默认存储", error);
+    }
+
+    const sources: FileSource[] = [];
+    const seen = new Set<string>();
+    const push = (source: FileSource, storageId: number) => {
+        if (sources.length >= MAX_FILE_SOURCE_CANDIDATES) return;
+        const marker = `${storageId}:${source.objectKey}`;
+        if (seen.has(marker)) return;
+        seen.add(marker);
+        sources.push(source);
+    };
+
+    const recordedStorageId = fileRow && fileRow.storageId !== DEFAULT_STORAGE_ID ? fileRow.storageId : null;
+
+    if (fileRow && recordedStorageId !== null) {
+        const storage = rows.find((row) => row.id === recordedStorageId);
         if (storage) {
-            try {
-                return { driver: await driverForRow(env, storage), objectKey: fileRow.objectKey, row: fileRow, storage };
-            } catch (error: any) {
-                // 恢复自旧账号的存储密钥可能已解不开；若环境变量里绑定了同一个桶，
-                // 继续用默认存储读取，避免整站图片 404。
-                console.warn(`[Storage] 存储 #${storage.id} 不可用，回退到默认存储：${error?.message || error}`);
+            for (const objectKey of objectKeyCandidates(key, storage.folder, fileRow.objectKey)) {
+                push(
+                    {
+                        resolveDriver: () => driverForRow(env, storage),
+                        objectKey,
+                        row: fileRow,
+                        storage,
+                        heal: objectKey === fileRow.objectKey ? undefined : { storageId: storage.id, objectKey },
+                    },
+                    storage.id,
+                );
             }
+        } else {
+            // 记录还在但存储行已被删除：后面的全量扫描会把它找回来并自愈记录。
+            console.warn(`[Storage] 文件 ${key} 指向已不存在的存储 #${recordedStorageId}，尝试全量兜底`);
         }
     }
 
     const envDriver = createEnvDriverIfConfigured(env);
-    if (!envDriver) return null;
-    return { driver: envDriver.driver, objectKey: fileRow?.objectKey ?? key, row: fileRow };
+    if (envDriver) {
+        // 默认存储上传时会去掉 folder 末尾的 images 再拼 key，这里保持一致。
+        const cleanFolder = envDriver.folder.replace(/images\/?$/, "");
+        const recorded = fileRow?.storageId === DEFAULT_STORAGE_ID ? fileRow.objectKey : undefined;
+        const candidates = objectKeyCandidates(key, cleanFolder, recorded);
+        for (const objectKey of candidates) {
+            push(
+                {
+                    driver: envDriver.driver,
+                    objectKey,
+                    row: fileRow?.storageId === DEFAULT_STORAGE_ID ? fileRow : undefined,
+                    heal: recorded === objectKey ? undefined : { storageId: DEFAULT_STORAGE_ID, objectKey },
+                },
+                DEFAULT_STORAGE_ID,
+            );
+        }
+    }
+
+    for (const storage of rows) {
+        if (storage.id === recordedStorageId) continue;
+        for (const objectKey of objectKeyCandidates(key, storage.folder, undefined)) {
+            push(
+                {
+                    resolveDriver: () => driverForRow(env, storage),
+                    objectKey,
+                    row: fileRow?.storageId === storage.id ? fileRow : undefined,
+                    storage,
+                    heal: { storageId: storage.id, objectKey },
+                },
+                storage.id,
+            );
+        }
+    }
+
+    return sources;
+}
+
+/** 兼容旧调用：只取第一个（最优）候选。 */
+export async function resolveFileSource(db: DB, env: Env, key: string): Promise<FileSource | null> {
+    const sources = await resolveFileSources(db, env, key);
+    return sources[0] ?? null;
+}
+
+/** 当实际命中的位置与 storage_files 记录不一致时，把记录纠正回来，下次直接命中。 */
+export async function healFileRecord(
+    db: DB,
+    key: string,
+    target: { storageId: number; objectKey: string },
+    meta?: { name?: string | null; mime?: string | null; size?: number | null },
+) {
+    try {
+        await recordFile(db, {
+            key,
+            storageId: target.storageId,
+            objectKey: target.objectKey,
+            name: meta?.name || key.split("/").pop() || key,
+            mime: meta?.mime || "",
+            size: Number(meta?.size) || 0,
+        });
+    } catch (error) {
+        console.warn(`[Storage] 回写文件记录失败（${key}）`, error);
+    }
 }
 
 export { encryptSecret };
