@@ -26,6 +26,7 @@ https://xeu.life
 - **Real-time Autosave**: Local drafts are saved automatically in real-time, with isolation between different articles.
 - **Privacy Control**: Mark articles as "Visible only to me" for private drafts or personal notes, synchronized across devices.
 - **Image Management**: Drag-and-drop or paste images to upload directly to S3-compatible storage (e.g., Cloudflare R2), with automatic link generation.
+- **Storage-Decoupled Media**: Files are stored as same-origin `/api/blob/<key>` paths, so rebinding R2 / S3 / WebDAV storage or changing your domain never breaks images in existing posts. Reads fall back through recorded storage → default storage → every other storage and self-heal the record; edge-cached responses skip the storage round-trip. See [multi-storage notes](./MULTI_STORAGE.md).
 - **Custom Slugs**: Assign friendly URLs like `https://yourblog.com/about` using custom article aliases.
 - **Unlisted Posts**: Option to keep articles out of the public homepage listing.
 - **Blogroll**: Add links to friends' blogs. The backend automatically checks link availability every 20 minutes.

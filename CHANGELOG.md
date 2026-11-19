@@ -24,6 +24,9 @@ which automatically generates release notes from commit messages.
 - **统一日志出口**: 新增 `utils/logger.ts`，缓存/RSS/sitemap 的调试日志默认静默，`LOG_DEBUG=1` 时输出；请求、定时任务、队列入口统一初始化。
 - **可选统计**: 统计脚本改为 `VITE_UMAMI_WEBSITE_ID` 配置后才加载，不再把访客数据发到上游作者的账号。
 - **灾难恢复文档**: 新增 `docs/docs/{zh,en}/guide/disaster-recovery.md`，完整说明「新账号 + 原存储桶」的恢复步骤与收尾检查。
+- **图片读取多路回退**: `/api/blob/<key>` 读取改为 `resolveFileSource` → `resolveFileSources`，按「记录存储 → 环境变量默认存储 → 其余接入的存储（含已停用）」逐个尝试；某个存储不可用不再直接 404。候选数量上限 8，失效的 key 不会把每个请求放大成全存储扫描。
+- **读取自愈**: 一旦在非记录存储里命中，立即把 `storage_files` 记录改写到实际位置（`healFileRecord`），下次直接精确命中；存储驱动改为惰性构造，坏配置的存储不会拖慢整条链路。
+- **图片边缘缓存**: `/api/blob` 接入 Cache API（`immutable` + `ETag`），命中时返回 `X-Edge-Cache: HIT` 且不查 D1、不回源存储；带 `If-None-Match` 返回 304；`Range` 请求（视频拖动）跳过缓存。
 
 ### Changed
 - **登录态只依赖 HttpOnly cookie**: 前端不再把 JWT 写入 localStorage，也不再从 URL 读取 token；OAuth 回调不再把 token 拼进跳转地址。
@@ -33,6 +36,9 @@ which automatically generates release notes from commit messages.
 - **结构**: `services/backup.ts` 拆出 `backup-core.ts`（纯逻辑）与路由层；`settings.tsx` 的备份/恢复面板抽成 `settings-backup.tsx`；`footer.tsx` 的音乐播放器抽成 `site-music-player.tsx`；删除 `client/src/components/{button,icon,input,loading,padding}.tsx` 转发层，统一从 `@rin/ui` 引入。
 - **文档**: 更新 `AGENTS.md` 中过时的 `packages/ui` 描述，补齐 `deploy:server` / `deploy:client` 脚本与日语翻译缺失的 key。
 - **恢复结果回包**: 恢复接口改为返回数据库回读的真实条数与提示（`counts` / `warnings` / `safetyBackup`），后台会把「还需手动处理」的事项直接提示给站长。
+- **图片地址与存储彻底解耦**: 新上传文件只保存 `/api/blob/<key>` 相对路径，URL 里不再出现 bucket、域名或存储 ID；正文渲染时把历史 `https://旧域名/api/blob/...` 统一改写为同源相对路径（覆盖图片、`[](…)` 附件、`<a href>`、`<video src>`），改域名、换绑存储都不需要回刷历史文章。
+- **RSS 输出补全域名**: 正文与封面图里的 blob 链接在输出时按当前站点域名（`FRONTEND_URL`）补全，RSS 阅读器里的老文章图片不再指向失效域名。
+- **图片懒加载**: 正文图片、封面图、卡片图统一加 `loading="lazy"` 与 `decoding="async"`，首屏只加载可视区图片；默认头像回退由不存在的 `/avatar.png` 改为 `/favicon.png`。
 
 ### Removed
 - **JS 可读的 `auth_token` cookie** 与前端 localStorage token 存储（登录态统一走 HttpOnly cookie）。
