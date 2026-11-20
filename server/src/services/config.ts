@@ -24,6 +24,33 @@ import {
     runCompatAISummaryBackfill,
 } from "./config-compat-tasks";
 
+const BOOTSTRAP_CACHE_TTL = 60;
+
+type EdgeCache = { match: (req: Request) => Promise<Response | undefined>; put: (req: Request, res: Response) => Promise<void>; delete: (req: Request) => Promise<boolean> };
+
+function getEdgeCache(): EdgeCache | null {
+    try {
+        const store = (globalThis as any).caches;
+        return store?.default ?? null;
+    } catch {
+        return null;
+    }
+}
+
+function bootstrapCacheKey(url: string) {
+    return new Request(new URL('/api/config/client/bootstrap.js', url).toString(), { method: 'GET' });
+}
+
+async function purgeBootstrapCache(url: string) {
+    const edgeCache = getEdgeCache();
+    if (!edgeCache) return;
+    try {
+        await edgeCache.delete(bootstrapCacheKey(url));
+    } catch {
+        // 边缘缓存不可用时忽略
+    }
+}
+
 export function ConfigService(): Hono {
     const app = new Hono();
 
@@ -228,6 +255,15 @@ export function ConfigService(): Hono {
     }));
 
     app.get('/client/bootstrap.js', async (c: AppContext) => {
+        // 这段脚本是 <head> 里的阻塞脚本，每次访问都要回源查 D1 配置（实测 TTFB 约 1s）。
+        // 用 Cache API 在边缘缓存 60s：命中时不再查库，配置保存时主动失效。
+        const edgeCache = getEdgeCache();
+        const cacheKey = edgeCache ? bootstrapCacheKey(c.req.url) : null;
+        if (edgeCache && cacheKey) {
+            const hit = await edgeCache.match(cacheKey);
+            if (hit) return hit;
+        }
+
         const clientConfig = c.get('clientConfig');
         const serverConfig = c.get('serverConfig');
         const env = c.get('env');
@@ -235,13 +271,24 @@ export function ConfigService(): Hono {
         const config = await profileAsync(c, 'bootstrap_client_config', () => buildClientConfigResponse(clientConfig, serverConfig, env, profile));
         const script = await profileAsync(c, 'bootstrap_script', () => Promise.resolve(serializeBootstrapScript(config)));
 
-        return new Response(script, {
+        const response = new Response(script, {
             status: 200,
             headers: {
                 'content-type': 'application/javascript; charset=utf-8',
-                'cache-control': 'public, max-age=0, must-revalidate',
+                'cache-control': `public, max-age=0, s-maxage=${BOOTSTRAP_CACHE_TTL}, must-revalidate`,
+                'x-bootstrap-cache': edgeCache ? 'MISS' : 'BYPASS',
             },
         });
+
+        if (edgeCache && cacheKey) {
+            try {
+                c.executionCtx.waitUntil(edgeCache.put(cacheKey, response.clone()));
+            } catch {
+                // 无 executionCtx（如单测环境）时跳过缓存写入
+            }
+        }
+
+        return response;
     });
 
     // GET /config/:type
@@ -292,6 +339,9 @@ export function ConfigService(): Hono {
         if (Object.keys(aiConfigUpdates).length > 0) {
             await setAIConfig(serverConfig, aiConfigUpdates);
         }
+
+        // 配置变更后立即失效 bootstrap 边缘缓存，避免访客拿到旧配置
+        await purgeBootstrapCache(c.req.url);
 
         return c.json(await buildCombinedConfigResponse(clientConfig, serverConfig, env));
     }));

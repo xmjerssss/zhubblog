@@ -21,7 +21,9 @@
       站点配置由服务端注入（名称、头像、主题等），必须早于应用脚本执行。
       data-cfasync="false" 让 Cloudflare 的 Rocket Loader 不要延迟它。
     -->
-    <script data-cfasync="false" src="/api/config/client/bootstrap.js"></script>
+    <!-- defer：脚本只赋值 globalThis.__RIN_CLIENT_CONFIG__，不操作 DOM；
+         加 defer 后不再阻塞 HTML 解析与首屏绘制，仍保证早于 module 应用脚本执行。 -->
+    <script data-cfasync="false" defer src="/api/config/client/bootstrap.js"></script>
 
     <!--
       构建产物更新后，旧页面引用的旧 chunk 已被删除，动态 import 会失败。
