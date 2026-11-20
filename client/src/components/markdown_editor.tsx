@@ -10,13 +10,23 @@ import { MAX_UPLOAD_SIZE } from "../api/client";
 import { buildMarkdownImage, uploadImageFile } from "../utils/image-upload";
 import { Markdown } from "./markdown";
 import {
+  AccentSwatches,
   ColorSwatches,
   HIGHLIGHT_COLORS,
   TEXT_COLORS,
   ToolbarDropdown,
+  preventFocusSteal,
   toolbarButtonClass,
   type ToolbarMenuItem,
 } from "./markdown_editor_menus";
+import {
+  ACCENT_PRESETS,
+  accentFromHex,
+  buildLayoutBlock,
+  findAccent,
+  type AccentPreset,
+  type LayoutBlockKey,
+} from "./markdown_editor_blocks";
 
 interface MarkdownEditorProps {
   content: string;
@@ -29,6 +39,16 @@ type EditorPosition = {
   lineNumber: number;
   column: number;
 };
+
+type FontSizeKey = "xs" | "s" | "l" | "xl" | "xxl";
+
+// 字体只在片段上生效，别指望手机上装了什么字体，给的都是通用族名。
+const FONT_FAMILIES: { key: string; label: string; value: string }[] = [
+  { key: "sans", label: "无衬线（默认）", value: "'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif" },
+  { key: "serif", label: "衬线（宋体感）", value: "'Songti SC', 'SimSun', Georgia, serif" },
+  { key: "mono", label: "等宽（代码感）", value: "'JetBrains Mono', 'Sarasa Mono SC', Consolas, monospace" },
+  { key: "kai", label: "楷体", value: "'Kaiti SC', 'KaiTi', 'STKaiti', serif" },
+];
 
 const CODE_FENCE = "```";
 
@@ -114,7 +134,8 @@ function MarkdownToolButton({
       aria-label={label}
       title={label}
       disabled={disabled}
-      onMouseDown={(event) => event.preventDefault()}
+      onMouseDown={preventFocusSteal}
+      onPointerDown={preventFocusSteal}
       onClick={onClick}
       className={toolbarButtonClass}
     >
@@ -166,6 +187,16 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
   const colorMode = useColorMode();
   const editorRef = useRef<editor.IStandaloneCodeEditor>();
   const isComposingRef = useRef(false);
+  // 手机上点工具栏会让编辑器失焦、选区塌陷到 (1,1)，插入就跑到文首去了。
+  // 这里一直记住「最后一次真实的选区」，失焦后插ins仍按它来。
+  const lastSelectionRef = useRef<Selection | null>(null);
+  // 用户是否真正在正文里点过/选过；没动过时点工具栏就把内容追加到文末，
+  // 否则会插到看不见的 (1,1)，表现就是「点了一下闪一下、什么也没发生」。
+  const hasUserSelectedRef = useRef(false);
+  const [accentKey, setAccentKey] = useState<string>("green");
+  const [customAccent, setCustomAccent] = useState<string>("");
+  const [hint, setHint] = useState<string>("");
+  const hintTimerRef = useRef<number | null>(null);
   const [preview, setPreview] = useState<'edit' | 'preview' | 'comparison'>('edit');
   const [uploading, setUploading] = useState(false);
   const { showAlert, AlertUI } = useAlert();
@@ -301,12 +332,46 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
       });
   };
 
+  // 触屏设备不主动抢焦点：否则键盘弹起、页面滚动，看起来就是「点了一下闪一下」。
+  const prefersTouch = () => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+    return window.matchMedia("(pointer: coarse)").matches;
+  };
+
+  const showHint = (message: string) => {
+    setHint(message);
+    if (hintTimerRef.current !== null) {
+      window.clearTimeout(hintTimerRef.current);
+    }
+    hintTimerRef.current = window.setTimeout(() => {
+      setHint("");
+      hintTimerRef.current = null;
+    }, 2600);
+  };
+
   const getEditorAndSelection = () => {
     const editorInstance = editorRef.current;
     const model = editorInstance?.getModel();
-    const selection = editorInstance?.getSelection();
+    if (!editorInstance || !model) {
+      return null;
+    }
 
-    if (!editorInstance || !model || !selection) {
+    const live = editorInstance.getSelection();
+    const remembered = lastSelectionRef.current;
+
+    if (!hasUserSelectedRef.current && !editorInstance.hasTextFocus()) {
+      // 用户还没在正文里点过：直接追加到文末，否则会插到看不见的文章开头。
+      const lineCount = model.getLineCount();
+      const endColumn = model.getLineMaxColumn(lineCount);
+      const tail = new Selection(lineCount, endColumn, lineCount, endColumn);
+      return { editorInstance, model, selection: tail };
+    }
+
+    // 有焦点时以实时选区为准；失焦（手机点工具栏、页面滚动）时退回记忆选区，
+    // 否则 live 常常已经塌陷到 (1,1)，文字就被插到文章开头。
+    const selection = editorInstance.hasTextFocus() ? (live ?? remembered) : (remembered ?? live);
+
+    if (!selection) {
       return null;
     }
 
@@ -315,23 +380,39 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
 
   const replaceSelection = (range: Range, text: string, nextSelection?: Selection) => {
     const editorInstance = editorRef.current;
-    if (!editorInstance) return;
+    const model = editorInstance?.getModel();
+    if (!editorInstance || !model) return;
+
+    // 追加到文末时，如果最后一行还有字，先补空行，避免 ***粗体*** 粘在正文上失效。
+    let payload = text;
+    const lastLineNumber = model.getLineCount();
+    const lastLineMaxColumn = model.getLineMaxColumn(lastLineNumber);
+    const isTail = range.startLineNumber === lastLineNumber && range.startColumn === lastLineMaxColumn;
+    const lastLineText = model.getLineContent(lastLineNumber);
+    if (isTail && lastLineText.trim() !== "" && !payload.startsWith("\n")) {
+      payload = `\n\n${payload}`;
+    }
 
     editorInstance.executeEdits("markdown-toolbar", [{
       range,
-      text,
+      text: payload,
       forceMoveMarkers: true,
     }]);
     setContent(editorInstance.getValue());
 
-    if (nextSelection) {
-      editorInstance.setSelection(nextSelection);
-    } else {
-      const position = positionAfterText(range.startLineNumber, range.startColumn, text);
-      editorInstance.setPosition(position);
+    let target = nextSelection;
+    if (!target) {
+      const position = positionAfterText(range.startLineNumber, range.startColumn, payload);
+      target = new Selection(position.lineNumber, position.column, position.lineNumber, position.column);
     }
 
-    editorInstance.focus();
+    editorInstance.setSelection(target);
+    lastSelectionRef.current = target;
+    editorInstance.revealPositionInCenterIfOutsideViewport(target.getStartPosition());
+
+    if (!prefersTouch()) {
+      editorInstance.focus();
+    }
   };
 
   const wrapSelection = (prefix: string, suffix: string, fallback: string) => {
@@ -547,12 +628,17 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
       if (!editorState) return;
       const { model, selection } = editorState;
       const selectedText = model.getValueInRange(selection);
-      if (!selectedText) return;
+      if (!selectedText) {
+        showHint("先选中要恢复默认颜色的文字");
+        return;
+      }
       replaceSelection(selection, stripInlineStyles(selectedText));
+      showHint("已恢复默认颜色");
       return;
     }
 
     wrapSelection(`<span style="color: ${color}">`, "</span>", "文字");
+    showHint(`已应用文字颜色 ${color}`);
   };
 
   const applyHighlight = (color: string) => {
@@ -561,8 +647,12 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
       if (!editorState) return;
       const { model, selection } = editorState;
       const selectedText = model.getValueInRange(selection);
-      if (!selectedText) return;
+      if (!selectedText) {
+        showHint("先选中要取消高亮的文字");
+        return;
+      }
       replaceSelection(selection, stripInlineStyles(selectedText));
+      showHint("已取消高亮");
       return;
     }
 
@@ -571,11 +661,25 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
       "</mark>",
       "高亮文字",
     );
+    showHint(`已应用高亮 ${color}`);
   };
 
-  const applyFontSize = (size: "large" | "small") => {
-    const value = size === "large" ? "1.2em" : "0.85em";
-    wrapSelection(`<span style="font-size: ${value}">`, "</span>", "文字");
+  const FONT_SIZES: { key: FontSizeKey; label: string; hint: string; value: string }[] = [
+    { key: "xs", label: "特小", hint: "0.8×", value: "0.8em" },
+    { key: "s", label: "小字", hint: "0.9×", value: "0.9em" },
+    { key: "l", label: "放大", hint: "1.2×", value: "1.2em" },
+    { key: "xl", label: "特大", hint: "1.5×", value: "1.5em" },
+    { key: "xxl", label: "超大", hint: "2×", value: "2em" },
+  ];
+
+  const applyFontSize = (size: FontSizeKey) => {
+    const preset = FONT_SIZES.find((item) => item.key === size) ?? FONT_SIZES[2];
+    wrapSelection(`<span style="font-size: ${preset.value}">`, "</span>", "文字");
+  };
+
+  const applyFontFamily = (family: string) => {
+    if (!family) return;
+    wrapSelection(`<span style="font-family: ${family}">`, "</span>", "文字");
   };
 
   const insertAlert = (type: string, sample: string) => {
@@ -650,6 +754,45 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
     icon: "ri-error-warning-line",
     onClick: () => insertAlert(alert.key, alert.sample),
   }));
+
+  // 排版块的强调色：默认绿（跟站点主色一致），也可以在面板里换任意颜色。
+  const activeAccent: AccentPreset = useMemo(
+    () => (customAccent ? accentFromHex(customAccent) : findAccent(accentKey)),
+    [accentKey, customAccent],
+  );
+
+  const insertLayout = (key: LayoutBlockKey, label: string) => {
+    const editorState = getEditorAndSelection();
+    if (!editorState) return;
+    const selectedText = editorState.model.getValueInRange(editorState.selection);
+    const snippet = buildLayoutBlock(key, { text: selectedText, accent: activeAccent });
+    replaceSelection(editorState.selection, snippet);
+    showHint(`已插入「${label}」，切到「预览」就能看到效果`);
+  };
+
+  const layoutItems: ToolbarMenuItem[] = [
+    { key: "template", label: "整套排版模板", icon: "ri-layout-masonry-line", hint: "推荐", onClick: () => insertLayout("template", "整套排版模板") },
+    { key: "section", label: "竖线小标题", icon: "ri-heading", onClick: () => insertLayout("section", "竖线小标题") },
+    { key: "card", label: "彩色卡片", icon: "ri-sticky-note-line", onClick: () => insertLayout("card", "彩色卡片") },
+    { key: "quote", label: "彩色引用", icon: "ri-double-quotes-r", onClick: () => insertLayout("quote", "彩色引用") },
+    { key: "table3", label: "彩色表格 3 列", icon: "ri-table-line", onClick: () => insertLayout("table3", "彩色表格") },
+    { key: "table4", label: "彩色表格 4 列", icon: "ri-table-line", onClick: () => insertLayout("table4", "彩色表格") },
+    { key: "grid", label: "两栏卡片", icon: "ri-layout-column-line", onClick: () => insertLayout("grid", "两栏卡片") },
+    { key: "badges", label: "标签徽章", icon: "ri-price-tag-3-line", onClick: () => insertLayout("badges", "标签徽章") },
+    { key: "divider", label: "虚线分割线", icon: "ri-separator", onClick: () => insertLayout("divider", "虚线分割线") },
+  ];
+
+  const pickAccent = (value: string) => {
+    if (value.startsWith("#")) {
+      setCustomAccent(value);
+      showHint(`已把强调色设为 ${value}，之后插入的排版块都用这个颜色`);
+      return;
+    }
+    setAccentKey(value);
+    setCustomAccent("");
+    const preset = findAccent(value);
+    showHint(`强调色已切换为「${preset.name}」`);
+  };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
     const clipboardData = event.clipboardData;
@@ -758,6 +901,13 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
   const handleEditorMount = (editorInstance: editor.IStandaloneCodeEditor) => {
     editorRef.current = editorInstance;
 
+    editorInstance.onDidChangeCursorSelection((event) => {
+      lastSelectionRef.current = event.selection;
+      if (event.source !== "api") {
+        hasUserSelectedRef.current = true;
+      }
+    });
+
     editorInstance.onDidCompositionStart(() => {
       isComposingRef.current = true;
     });
@@ -832,6 +982,8 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
               colors={TEXT_COLORS}
               onPick={(value) => applyTextColor(value)}
               noneLabel="默认颜色"
+              allowCustom
+              customLabel="自定义文字颜色"
             />
           </ToolbarDropdown>
           <ToolbarDropdown
@@ -843,12 +995,29 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
               colors={HIGHLIGHT_COLORS}
               onPick={(value) => applyHighlight(value)}
               noneLabel="取消高亮"
+              allowCustom
+              customLabel="自定义高亮颜色"
             />
           </ToolbarDropdown>
-          <ToolbarDropdown label="字号" icon="ri-font-size" items={[
-            { key: "large", label: "放大字号", icon: "ri-font-size-2", onClick: () => applyFontSize("large") },
-            { key: "small", label: "缩小字号", icon: "ri-font-size", onClick: () => applyFontSize("small") },
-          ]} />
+          <ToolbarDropdown
+            label="字号"
+            icon="ri-font-size"
+            items={FONT_SIZES.map((size) => ({
+              key: size.key,
+              label: size.label,
+              hint: size.hint,
+              onClick: () => applyFontSize(size.key),
+            }))}
+          />
+          <ToolbarDropdown
+            label="字体"
+            icon="ri-font-family"
+            items={FONT_FAMILIES.map((font) => ({
+              key: font.key,
+              label: font.label,
+              onClick: () => applyFontFamily(font.value),
+            }))}
+          />
 
           <span className="mx-1 hidden h-6 w-px bg-black/10 dark:bg-white/10 sm:block" aria-hidden="true" />
 
@@ -856,6 +1025,20 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
           <MarkdownToolButton label={t("markdown_editor.toolbar.unordered_list")} icon="ri-list-unordered" onClick={formatUnorderedList} />
           <MarkdownToolButton label={t("markdown_editor.toolbar.ordered_list")} icon="ri-list-ordered" onClick={formatOrderedList} />
           <ToolbarDropdown label="提示块" icon="ri-error-warning-line" items={alertItems} />
+          <ToolbarDropdown label="排版样式（带颜色）" icon="ri-layout-masonry-line" items={layoutItems} panelClassName="w-56" />
+          <ToolbarDropdown label="强调色" icon="ri-palette-line" panelClassName="w-56">
+            <div>
+              <AccentSwatches
+                presets={ACCENT_PRESETS}
+                activeKey={customAccent ? activeAccent.key : accentKey}
+                onPick={pickAccent}
+                customValue={customAccent || activeAccent.solid}
+              />
+              <p className="px-2 pb-1 text-[11px] leading-4 text-neutral-400">
+                当前「{activeAccent.name}」· 作用于竖线标题 / 卡片 / 彩色表格
+              </p>
+            </div>
+          </ToolbarDropdown>
 
           <span className="mx-1 hidden h-6 w-px bg-black/10 dark:bg-white/10 sm:block" aria-hidden="true" />
 
@@ -873,6 +1056,11 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
           <div className="flex flex-row items-center space-x-2 px-2">
             <Loading type="spin" color="#FC466B" height={16} width={16} />
             <span className="text-sm text-neutral-500">{t('uploading')}</span>
+          </div>
+        }
+        {hint &&
+          <div className="px-2 pb-1 text-xs text-theme" role="status" aria-live="polite">
+            {hint}
           </div>
         }
       </FlatInset>
@@ -910,6 +1098,7 @@ export function MarkdownEditor({ content, setContent, placeholder = "> Write you
           <div className="flex items-center justify-end gap-3 px-2 py-1 text-xs text-neutral-400">
             <span>{wordCount} 字</span>
             <span>{lineCount} 行</span>
+            <span>约 {Math.max(1, Math.round(wordCount / 400))} 分钟读完</span>
           </div>
         </div>
         <div

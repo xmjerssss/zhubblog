@@ -145,7 +145,21 @@ ul {
 }
 
 .table th {
-  @apply bg-slate-200 dark:bg-slate-700;
+  /* 表头跟着站点主题色走（默认是绿），跟图里那种浅绿表头一致 */
+  background-color: rgb(var(--theme-rgb, 22 163 74) / 0.12);
+  font-weight: 600;
+}
+
+[data-color-mode="dark"] .table th {
+  background-color: rgb(var(--theme-rgb, 22 163 74) / 0.26);
+}
+
+.table tbody tr:nth-child(even) {
+  background-color: rgb(var(--rin-text-rgb, 17 24 39) / 0.02);
+}
+
+[data-color-mode="dark"] .table tbody tr:nth-child(even) {
+  background-color: rgb(255 255 255 / 0.04);
 }
 
 /* TOC Style */
