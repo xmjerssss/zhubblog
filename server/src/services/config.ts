@@ -282,7 +282,9 @@ export function ConfigService(): Hono {
                 // 浏览器不缓存（配置随时可能变），只让边缘缓存 60s。
                 // 用 CDN-Cache-Control 单独控制边缘，避免 s-maxage 被 CDN 的
                 // Browser Cache TTL 设置改写成数小时的 max-age。
-                'cache-control': 'public, max-age=0, must-revalidate',
+                // no-store 让浏览器完全不缓存（CDN 的 Browser Cache TTL 会把 max-age 改写成数小时），
+                // 边缘缓存由 cdn-cache-control 单独控制，配置保存时主动失效。
+                'cache-control': 'no-store',
                 'cdn-cache-control': `max-age=${BOOTSTRAP_CACHE_TTL}`,
                 'x-bootstrap-cache': edgeCache ? 'MISS' : 'BYPASS',
             },
