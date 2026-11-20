@@ -13,7 +13,7 @@ import useTableOfContents from "../hooks/useTableOfContents";
 import { useSiteConfig } from "../hooks/useSiteConfig";
 import { CallbackPage } from "../page/callback";
 import { ErrorPage } from "../page/error";
-import { FeedPage, TOCHeader } from "../page/feed";
+import { TOCHeader } from "../page/toc-header";
 import { FeedsPage } from "../page/feeds";
 import { ProfileContext } from "../state/profile";
 import { tryInt } from "../utils/int";
@@ -31,6 +31,9 @@ function lazyPage<T extends Record<string, unknown>>(
   });
 }
 
+// 文章页含 Markdown 渲染链（unified/remark/rehype/katex/prism，br 后约 256KB），
+// 首页 FeedCard 只用服务端 stripMarkdown 后的摘要，故改为按需加载，避免锁进首屏。
+const FeedPage = lazyPage(() => import("../page/feed"), "FeedPage");
 const CompatTasksPage = lazyPage(() => import("../page/compat-tasks"), "CompatTasksPage");
 const FriendsPage = lazyPage(() => import("../page/friends"), "FriendsPage");
 const HealthPage = lazyPage(() => import("../page/health"), "HealthPage");
