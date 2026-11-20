@@ -261,7 +261,11 @@ export function ConfigService(): Hono {
         const cacheKey = edgeCache ? bootstrapCacheKey(c.req.url) : null;
         if (edgeCache && cacheKey) {
             const hit = await edgeCache.match(cacheKey);
-            if (hit) return hit;
+            if (hit) {
+                const cached = new Response(hit.body, hit);
+                cached.headers.set('x-bootstrap-cache', 'HIT');
+                return cached;
+            }
         }
 
         const clientConfig = c.get('clientConfig');
@@ -275,7 +279,11 @@ export function ConfigService(): Hono {
             status: 200,
             headers: {
                 'content-type': 'application/javascript; charset=utf-8',
-                'cache-control': `public, max-age=0, s-maxage=${BOOTSTRAP_CACHE_TTL}, must-revalidate`,
+                // 浏览器不缓存（配置随时可能变），只让边缘缓存 60s。
+                // 用 CDN-Cache-Control 单独控制边缘，避免 s-maxage 被 CDN 的
+                // Browser Cache TTL 设置改写成数小时的 max-age。
+                'cache-control': 'public, max-age=0, must-revalidate',
+                'cdn-cache-control': `max-age=${BOOTSTRAP_CACHE_TTL}`,
                 'x-bootstrap-cache': edgeCache ? 'MISS' : 'BYPASS',
             },
         });
